@@ -88,6 +88,7 @@ COPY --chmod=0444 env/image/oh_common.py /usr/local/lib/oh-prepared/oh_common.py
 RUN set -eux; \
     chown -R root:root /opt/prepared; \
     chmod -R a-w /opt/prepared; \
-    find /opt/prepared -type d -exec chmod 0555 {} +
+    find /opt/prepared -type d -exec chmod 0555 {} +; \
+    git config --system --add safe.directory /opt/prepared/seed/repo.git
 USER openhands
 WORKDIR /

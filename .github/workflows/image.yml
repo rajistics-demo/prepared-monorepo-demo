@@ -140,6 +140,9 @@ jobs:
           docker run --rm --entrypoint /bin/bash "$SANDBOX_REPO:$TAG" -c 'set -eux
             id; ruby -v; bundle -v; command -v prepare-workspace oh-verify oh-phase oh-cleanup
             test -f /opt/prepared/lock.json; git -C /opt/prepared/seed/repo.git rev-parse refs/heads/main
+            git clone --no-hardlinks --no-checkout --quiet /opt/prepared/seed/repo.git /tmp/clone
+            test ! -e /tmp/clone/.git/objects/info/alternates
+            git -C /tmp/clone cat-file -e "$(git -C /opt/prepared/seed/repo.git rev-parse refs/heads/main)^{commit}"
             if touch /opt/prepared/probe 2>/dev/null; then echo "/opt/prepared is writable by $(id -un)" >&2; exit 1; fi
             key="$(python3 /opt/prepared/bin/keys.py bundle --repo /opt/prepared/src)"
             test "$(readlink /opt/prepared/bundle/current)" = "$key"
