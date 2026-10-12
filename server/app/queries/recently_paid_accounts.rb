@@ -11,7 +11,6 @@ class RecentlyPaidAccounts
   def call
     @scope
       .billable
-      .paying
       .order(last_payment_at: :desc, id: :asc)
       .limit(@limit)
   end
