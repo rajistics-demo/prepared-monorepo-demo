@@ -1,0 +1,16 @@
+[package]
+name = "events-svc"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+publish = false
+description = "Synthetic events service that owns the PostgreSQL 17 events schema for the prepared-monorepo demo"
+
+[dependencies]
+postgres = "=0.19.14"
+tiny_http = "=0.12.0"
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1

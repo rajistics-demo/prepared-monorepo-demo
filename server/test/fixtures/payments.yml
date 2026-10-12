@@ -1,0 +1,19 @@
+acme_september:
+  account: acme
+  amount_cents: 12900
+  paid_at: 2026-09-01 12:00:00
+
+umbrella_september:
+  account: umbrella
+  amount_cents: 45000
+  paid_at: 2026-09-10 08:30:00
+
+initech_august:
+  account: initech
+  amount_cents: 4900
+  paid_at: 2026-08-15 09:00:00
+
+hooli_september:
+  account: hooli
+  amount_cents: 9900
+  paid_at: 2026-09-20 10:00:00

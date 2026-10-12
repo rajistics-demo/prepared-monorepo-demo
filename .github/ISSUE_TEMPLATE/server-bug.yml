@@ -1,0 +1,30 @@
+name: Server bug
+description: A concrete bug in server/ with observed and expected behavior
+labels: ["module:server"]
+body:
+  - type: dropdown
+    id: module
+    attributes:
+      label: Module
+      options: ["server"]
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: Endpoint, request or console steps. Do not paste credentials or production data.
+    validations:
+      required: true

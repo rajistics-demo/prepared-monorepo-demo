@@ -1,0 +1,223 @@
+#!/usr/bin/env python3
+"""Fresh, deterministic verification of an agent's fix at exact SHAs. No LLM.
+
+  oh-verify --base B --test-sha T --head H --tests <server/test/...rb ...>
+            [--mode prepared|cold] [--out verify.json] [--keep-tasks]
+
+Every verdict-bearing test run gets its OWN newly prepared task: a new
+checkout, a new Compose project and databases restored (or bootstrapped) from
+the keyed fixtures. No run sees state left behind by another run, including
+the agent's own conversation workspace.
+
+Steps
+  1  static: ancestry B <= T <= H; B..H touches only server/**, no forbidden
+     paths; B..T touches only server/test/**; tests at H equal tests at T
+     (else NEEDS_REVIEW); bypass patterns and edits to pre-existing tests
+  2  RED   fresh task at B, tests from H overlaid -> ASSERTION_RED, failures
+     only inside the new tests
+  3  GREEN fresh task at H -> full server suite GREEN, and every new test is
+     present in it and passed
+  4  write verify.json with SHAs, test blob SHAs, per-run fresh-state facts
+     (Compose project, fixture source, row counts before the run), image/lock
+     provenance and timings; then tear down the verifier's own tasks
+
+Verdict PASS (exit 0), NEEDS_REVIEW (exit 2) or FAIL (exit 1).
+"""
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path[:0] = ["/usr/local/lib/oh-prepared", str(HERE)]
+from oh_common import (DEFAULT_REPO_URL, DEFAULT_TASK_ROOT, PREPARED, PhaseError, blob_shas,  # noqa: E402
+                       failures_within, git, git_auth_env, load_task_env, now_iso, run, run_rails_tests,
+                       sha256_file, write_json)
+
+FORBIDDEN = [
+    r"^server/bin/auth-check$", r"^server/lib/tasks/dev_bootstrap\.rake$", r"^server/compose\.yaml$",
+    r"^server/config/database\.yml$", r"^server/test/test_helper\.rb$", r"^server/test/support/",
+    r"^server/Gemfile(\.lock)?$", r"^server/db/", r"^server/test/setup/",
+    r"^env/", r"^\.github/", r"^services/", r"^web/", r"^mobile/",
+]
+BYPASS = [r"^\+.*\bskip\b", r"^\+.*\bpending\b", r"^\+.*\bassert\s*\(?\s*true\b", r"^\+.*assert_equal\s*\(?\s*true,\s*true",
+          r"^\+.*i_suck_and_my_tests_are_order_dependent", r"^\+.*\bomit\b"]
+
+
+def changed(repo: Path, a: str, b: str, *paths: str) -> list[str]:
+    out = git(repo, "diff", "--name-only", "--no-renames", f"{a}..{b}", *(["--", *paths] if paths else []))
+    return [l for l in out.splitlines() if l]
+
+
+def has_commit(repo: Path, sha: str) -> bool:
+    return run(["git", "-C", str(repo), "cat-file", "-e", f"{sha}^{{commit}}"], phase="verify",
+               check=False).returncode == 0
+
+
+def ensure_commits(repo: Path, *shas: str):
+    for sha in shas:
+        if not has_commit(repo, sha):
+            git(repo, "fetch", "--no-tags", "--quiet", "origin", sha, env=git_auth_env())
+
+
+def prepare(sha: str, label: str, args, owned: list[Path]) -> tuple[Path, dict]:
+    """Prepare a brand-new task at `sha`. Raises PhaseError if setup does not reach READY."""
+    run_id = f"verify-{label}-{sha[:8]}-{int(time.time())}"
+    task = (args.task_root / run_id).resolve()
+    if task.exists():
+        raise PhaseError("verify", f"refusing to reuse existing task dir {task}")
+    proc = subprocess.run([str(HERE / "prepare-workspace"), "--sha", sha, "--mode", args.mode, "--run-id", run_id,
+                           "--task-root", str(args.task_root), "--repo-url", args.repo_url, "--envs", "test"],
+                          capture_output=True, text=True)
+    if task.exists():
+        owned.append(task)
+    if proc.returncode != 0:
+        raise PhaseError(f"prepare:{label}", f"prepare-workspace exited {proc.returncode}: {proc.stderr[-1500:]}")
+    state = load_task_env(task)
+    if (task / "repo" / "server" / "tmp" / "evidence").exists():
+        raise PhaseError(f"prepare:{label}", "new task already contains test evidence; not fresh")
+    return task, state
+
+
+def fresh_facts(task: Path, state: dict) -> dict:
+    f = state["facts"]
+    return {"task_dir": str(task), "compose_project": state["env"]["COMPOSE_PROJECT_NAME"],
+            "prepared_at": state["updated_at"], "head_sha": f.get("head_sha"),
+            "fixtures_source": f.get("fixtures_source"), "row_counts_before_run": f.get("row_counts"),
+            "bundle_source": f.get("bundle_source"), "images_source": f.get("images_source"),
+            "checkout_source": f.get("checkout_source"), "cache_misses": state["cache_misses"],
+            "prepare_seconds": f.get("total_seconds")}
+
+
+def summarize(ev: dict) -> dict:
+    return {k: ev.get(k) for k in ("classification", "counts", "exit_code", "seconds", "head_sha", "paths")} | {
+        "failures": [{"test": r["test"], "file": r.get("file"), "class": r.get("failure_class"),
+                      "message": (r.get("message") or "")[:500]}
+                     for r in ev.get("results", []) if r["status"] in ("failure", "error")]}
+
+
+def new_tests_passed(ev: dict, tests: list[str]) -> dict:
+    norm = [t.removeprefix("server/") for t in tests]
+    mine = [r for r in ev.get("results", []) if any((r.get("file") or "").endswith(p) for p in norm)]
+    per_file = {p: [r["status"] for r in mine if (r.get("file") or "").endswith(p)] for p in norm}
+    return {"per_file": per_file, "ok": all(s and all(x == "pass" for x in s) for s in per_file.values())}
+
+
+def static_checks(repo: Path, args, tests: list[str]) -> tuple[dict, bool, list[str]]:
+    s = {}
+    s["ancestry"] = all(run(["git", "-C", str(repo), "merge-base", "--is-ancestor", a, b], phase="verify",
+                            check=False).returncode == 0
+                        for a, b in ((args.base, args.test_sha), (args.test_sha, args.head)))
+    b_to_h = changed(repo, args.base, args.head)
+    b_to_t = changed(repo, args.base, args.test_sha)
+    s["changed_files"] = b_to_h
+    s["outside_server"] = [p for p in b_to_h if not p.startswith("server/")]
+    s["forbidden"] = [p for p in b_to_h if any(re.search(f, p) for f in FORBIDDEN)]
+    s["test_commit_non_test_files"] = [p for p in b_to_t if not p.startswith("server/test/")]
+    s["tests_in_test_commit"] = all(t in b_to_t for t in tests)
+    s["tests_changed_after_red"] = changed(repo, args.test_sha, args.head, *tests)
+    s["pre_existing_tests_modified"] = [p for p in b_to_h if p.startswith("server/test/") and
+                                        run(["git", "-C", str(repo), "cat-file", "-e", f"{args.base}:{p}"],
+                                            phase="verify", check=False).returncode == 0]
+    test_diff = git(repo, "diff", "-U0", f"{args.base}..{args.head}", "--", "server/test")
+    s["bypass_patterns"] = [l for l in test_diff.splitlines() if any(re.search(p, l) for p in BYPASS)]
+    hard_fail = bool(not s["ancestry"] or s["outside_server"] or s["forbidden"]
+                     or s["test_commit_non_test_files"] or not s["tests_in_test_commit"])
+    flags = [f for f in ("tests_changed_after_red", "pre_existing_tests_modified", "bypass_patterns") if s[f]]
+    return s, hard_fail, flags
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--base", required=True)
+    ap.add_argument("--test-sha", required=True)
+    ap.add_argument("--head", required=True)
+    ap.add_argument("--tests", nargs="+", required=True)
+    ap.add_argument("--mode", choices=["prepared", "cold"], default="prepared")
+    ap.add_argument("--task-root", type=Path, default=DEFAULT_TASK_ROOT)
+    ap.add_argument("--repo-url", default=os.environ.get("OH_REPO_URL", DEFAULT_REPO_URL))
+    ap.add_argument("--keep-tasks", action="store_true", help="leave verifier tasks running for inspection")
+    ap.add_argument("--out", type=Path)
+    args = ap.parse_args()
+    for sha in (args.base, args.test_sha, args.head):
+        if not re.fullmatch(r"[0-9a-f]{40}", sha):
+            ap.error("all SHAs must be full 40-character commit SHAs")
+    args.task_root.mkdir(parents=True, exist_ok=True)
+    tests = [t if t.startswith("server/") else f"server/{t}" for t in args.tests]
+    t0 = time.monotonic()
+    report = {"verifier": "oh-verify", "started_at": now_iso(), "base": args.base, "test_sha": args.test_sha,
+              "head": args.head, "tests": tests, "mode": args.mode, "flags": [], "steps": {}, "runs": {},
+              "verdict": "FAIL"}
+    owned: list[Path] = []
+    try:
+        # RED: fresh task at B with the tests from H overlaid
+        red_task, red_state = prepare(args.base, "red", args, owned)
+        repo = red_task / "repo"
+        ensure_commits(repo, args.test_sha, args.head)
+        static, hard_fail, flags = static_checks(repo, args, tests)
+        report["steps"]["static"] = static
+        report["flags"] = flags
+        report["test_blob_shas"] = {"at_test_sha": blob_shas(repo, args.test_sha, tests),
+                                    "at_head": blob_shas(repo, args.head, tests)}
+        report["runs"]["red"] = fresh_facts(red_task, red_state)
+        git(repo, "checkout", args.head, "--", *tests)
+        report["runs"]["red"]["overlay"] = {"from": args.head, "paths": tests,
+                                            "worktree_diff_vs_base": changed_worktree(repo)}
+        red = run_rails_tests(red_task, red_state, tests, "verify-red")
+        red["head_sha"] = f"{args.base}+tests@{args.head}"
+        report["steps"]["red_at_base"] = summarize(red) | {"failures_within_tests": failures_within(red, tests)}
+
+        # GREEN: separate fresh task at H, full suite (includes the new tests)
+        green_task, green_state = prepare(args.head, "green", args, owned)
+        if git(green_task / "repo", "rev-parse", "HEAD") != args.head:
+            raise PhaseError("verify", "green checkout is not at --head")
+        report["runs"]["green"] = fresh_facts(green_task, green_state)
+        suite = run_rails_tests(green_task, green_state, [], "verify-suite")
+        report["steps"]["suite_at_head"] = summarize(suite) | {"new_tests": new_tests_passed(suite, tests)}
+
+        distinct = report["runs"]["red"]["compose_project"] != report["runs"]["green"]["compose_project"]
+        report["steps"]["independent_state"] = {"distinct_compose_projects": distinct,
+                                                "distinct_task_dirs": red_task != green_task}
+        ok = (not hard_fail and distinct
+              and red["classification"] == "ASSERTION_RED" and failures_within(red, tests)
+              and suite["classification"] == "GREEN" and new_tests_passed(suite, tests)["ok"])
+        report["verdict"] = ("NEEDS_REVIEW" if flags else "PASS") if ok else "FAIL"
+        if not ok:
+            env_cls = next((c for c in (red["classification"], suite["classification"]) if c.startswith("ENV")), None)
+            report["classification"] = env_cls or ("STATIC_CHECK" if hard_fail else "BEHAVIOR")
+    except PhaseError as e:
+        report["verdict"] = "FAIL"
+        report["classification"] = "ENV_PREPARE" if e.phase.startswith("prepare:") else "VERIFY_ERROR"
+        report["error"] = str(e)
+    return finish(report, args, owned, t0)
+
+
+def changed_worktree(repo: Path) -> list[str]:
+    return [l for l in git(repo, "diff", "--name-only", "HEAD").splitlines() if l] + \
+           [l for l in git(repo, "diff", "--name-only", "--cached", "HEAD").splitlines() if l]
+
+
+def finish(report: dict, args, owned: list[Path], t0: float) -> int:
+    report["seconds"] = round(time.monotonic() - t0, 3)
+    report["finished_at"] = now_iso()
+    lock = PREPARED / "lock.json"
+    report["image"] = {"ref": os.environ.get("OH_IMAGE_REF"),
+                       "lock_sha256": sha256_file(lock) if lock.exists() else None}
+    out = args.out or args.task_root / f"oh-verify-{args.head[:12]}-{int(time.time())}.json"
+    write_json(out, report)
+    report["cleanup"] = {}
+    if not args.keep_tasks:
+        for task in owned:
+            rc = subprocess.run([str(HERE / "oh-cleanup"), "--task", str(task)], capture_output=True).returncode
+            report["cleanup"][str(task)] = rc
+        write_json(out, report)
+    print(json.dumps({"verdict": report["verdict"], "flags": report["flags"], "out": str(out)}))
+    return {"PASS": 0, "NEEDS_REVIEW": 2}.get(report["verdict"], 1)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

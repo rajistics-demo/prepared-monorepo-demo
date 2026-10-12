@@ -1,0 +1,8 @@
+/build/
+/server/tmp/
+/server/log/
+/server/vendor/
+/server/.bundle/
+/services/events-svc/target/
+.env
+*.pem

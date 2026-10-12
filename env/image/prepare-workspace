@@ -1,0 +1,385 @@
+#!/usr/bin/env python3
+"""Prepare a private, writable task workspace at an exact commit.
+
+  prepare-workspace --sha <40-hex> [--mode prepared|cold] [--run-id ID]
+                    [--task-root DIR] [--repo-url URL] [--envs development,test]
+
+Modes
+  prepared  clone from the read-only seed, reuse the keyed bundle, load the
+            preloaded service images, restore keyed DB fixtures.
+  cold      clone over the network, install gems into the task, pull/build
+            service images and run `bin/rails dev:bootstrap`. Used for the
+            unprepared baseline and as the fallback for any cache-key miss.
+
+Layout (all task-owned and writable):
+  <task-root>/<run-id>/repo     independent git checkout (no alternates)
+  <task-root>/<run-id>/state    prepare.json, env.sh, compose.env, logs/
+  <task-root>/<run-id>/bundle   task-local gems (only on a bundle miss / cold)
+
+Cleanup ownership: on failure this script rolls back only its own Compose
+project. On success it leaves services and restored databases running for the
+coding conversation. Teardown after verification is the launcher's job
+(oh-cleanup), with sandbox TTLs as the fallback.
+
+Exit codes: 0 READY, 78 auth gate refused, 1 any other setup failure.
+"""
+import argparse
+import json
+import os
+import re
+import secrets
+import subprocess
+import sys
+import time
+import urllib.request
+from pathlib import Path
+
+sys.path[:0] = ["/usr/local/lib/oh-prepared", str(Path(__file__).resolve().parent)]
+from oh_common import (DEFAULT_REPO_URL, DEFAULT_TASK_ROOT, DB_FACTS_SQL, EXTENSIONS_SQL, IMAGE_ENV, LOGICAL_DBS,  # noqa: E402
+                       PREPARED, ROW_COUNTS_SQL, PhaseError, Timeline, compose_base, docker_cmd, free_port,
+                       git, git_auth_env, now_iso, psql_lines, run, sha256_file, write_json)
+
+PHASE_CLASS = {
+    "args": "ENV_ARGS", "checkout": "ENV_CHECKOUT", "auth_gate": "ENV_AUTH", "bundle": "ENV_BUNDLE",
+    "dockerd": "ENV_DOCKER", "images": "ENV_IMAGES", "services_db": "ENV_SERVICES", "fixtures": "ENV_FIXTURES",
+    "services_events": "ENV_SERVICES", "bootstrap": "ENV_BOOTSTRAP", "verify_ready": "ENV_READY",
+}
+
+
+class _InducedFailure:
+    """OH_TEST_FAIL_AFTER=<phase> makes setup fail right after that phase.
+
+    Used only by env/scripts/validate-image.sh to prove that rollback removes
+    the task's own containers and volumes. Unset in real runs.
+    """
+
+    def __init__(self):
+        self.phase = os.environ.get("OH_TEST_FAIL_AFTER")
+
+    def check(self, name: str):
+        if self.phase == name:
+            raise PhaseError(name, f"induced failure after {name} (OH_TEST_FAIL_AFTER)")
+
+
+class Prep:
+    def __init__(self, args):
+        self.args = args
+        self.mode = args.mode
+        self.run_id = args.run_id or f"{time.strftime('%Y%m%d%H%M%S')}-{secrets.token_hex(4)}"
+        self.task = (args.task_root / self.run_id).resolve()
+        self.repo = self.task / "repo"
+        self.state_dir = self.task / "state"
+        self.logs = self.state_dir / "logs"
+        self.timeline = Timeline()
+        self.cache_misses: list[str] = []
+        self.compose_started = False
+        self.lock = json.loads((PREPARED / "lock.json").read_text()) if (PREPARED / "lock.json").exists() else None
+        self.env: dict[str, str] = {}
+        self.facts: dict = {"mode": self.mode, "run_id": self.run_id, "target_sha": args.sha}
+        self.docker: list[str] = []
+
+    # ---------- phases ----------
+    def checkout(self):
+        seed = PREPARED / "seed" / "repo.git"
+        auth = git_auth_env()
+        if self.mode == "prepared" and seed.is_dir():
+            run(["git", "clone", "--no-hardlinks", "--no-checkout", "--quiet", str(seed), str(self.repo)],
+                phase="checkout", log=self.logs / "git.log")
+            git(self.repo, "remote", "set-url", "origin", self.args.repo_url, phase="checkout")
+            self.facts["checkout_source"] = "seed"
+        else:
+            if self.mode == "prepared":
+                self.cache_misses.append("seed")
+            run(["git", "clone", "--no-checkout", "--quiet", self.args.repo_url, str(self.repo)], phase="checkout",
+                env=auth, timeout=600, log=self.logs / "git.log")
+            self.facts["checkout_source"] = "network"
+        present = run(["git", "-C", str(self.repo), "cat-file", "-e", f"{self.args.sha}^{{commit}}"],
+                      phase="checkout", check=False).returncode == 0
+        self.facts["target_in_seed"] = present
+        if not present:
+            started = time.monotonic()
+            git(self.repo, "fetch", "--no-tags", "--quiet", "origin", self.args.sha, phase="checkout", env=auth,
+                timeout=600, log=self.logs / "git.log")
+            self.facts["fetch_seconds"] = round(time.monotonic() - started, 3)
+        git(self.repo, "checkout", "--quiet", "--detach", self.args.sha, phase="checkout", log=self.logs / "git.log")
+        head = git(self.repo, "rev-parse", "HEAD", phase="checkout")
+        if head != self.args.sha:
+            raise PhaseError("checkout", f"HEAD {head} != target {self.args.sha}")
+        if (self.repo / ".git" / "objects" / "info" / "alternates").exists():
+            raise PhaseError("checkout", "checkout has objects/info/alternates; refusing a shared object store")
+        self.facts["head_sha"] = head
+
+    def auth_gate(self):
+        if not os.environ.get("AUTH_MODE"):
+            raise PhaseError("auth_gate", "AUTH_MODE is not set (use AUTH_MODE=none for the synthetic demo)", 78)
+        proc = run([str(self.repo / "server" / "bin" / "auth-check")], phase="auth_gate", check=False,
+                   log=self.logs / "auth-check.log")
+        self.facts["auth_mode"] = os.environ["AUTH_MODE"]
+        if proc.returncode != 0:
+            raise PhaseError("auth_gate", f"bin/auth-check refused (exit {proc.returncode})",
+                             proc.returncode if proc.returncode == 78 else 78)
+
+    def bundle(self):
+        server = self.repo / "server"
+        keys_py = PREPARED / "bin" / "keys.py"
+        if not keys_py.exists():
+            keys_py = self.repo / "env" / "keys" / "keys.py"
+        key = run(["python3", str(keys_py), "bundle", "--repo", str(self.repo)], phase="bundle",
+                  capture=True).stdout.decode().strip()
+        prepared_path = PREPARED / "bundle" / key
+        self.facts["bundle_key"] = key
+        base_env = {
+            "BUNDLE_GEMFILE": str(server / "Gemfile"),
+            "BUNDLE_FROZEN": "true",
+            "BUNDLE_APP_CONFIG": str(self.state_dir / "bundle-config"),
+            "BUNDLE_USER_HOME": str(self.state_dir / "bundle-home"),
+        }
+        if self.mode == "prepared" and prepared_path.is_dir():
+            base_env["BUNDLE_PATH"] = str(prepared_path)
+            self.facts["bundle_source"] = "prepared"
+        else:
+            if self.mode == "prepared":
+                self.cache_misses.append("bundle")
+            base_env["BUNDLE_PATH"] = str(self.task / "bundle")
+            base_env["BUNDLE_JOBS"] = str(os.cpu_count() or 2)
+            self.facts["bundle_source"] = "task-install"
+            run(["bundle", "install"], phase="bundle", cwd=server, env=base_env, timeout=1800,
+                log=self.logs / "bundle.log")
+        run(["bundle", "check"], phase="bundle", cwd=server, env=base_env, log=self.logs / "bundle.log")
+        run(["bundle", "exec", "ruby", "-e",
+             'require "pg"; abort("libpq < 14") unless PG.library_version >= 140000'],
+            phase="bundle", cwd=server, env=base_env, log=self.logs / "bundle.log")
+        self.env.update(base_env)
+
+    def dockerd(self):
+        if run(["docker", "info"], phase="dockerd", check=False, capture=True).returncode != 0 and \
+           run(["sudo", "-n", "docker", "info"], phase="dockerd", check=False, capture=True).returncode != 0:
+            log = open(self.logs / "dockerd.log", "ab")
+            subprocess.Popen(["sudo", "-n", "dockerd"], stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                ok = run(["sudo", "-n", "docker", "info"], phase="dockerd", check=False, capture=True).returncode == 0
+                if ok:
+                    break
+                time.sleep(1)
+            else:
+                raise PhaseError("dockerd", "dockerd did not become ready within 30s")
+            self.facts["dockerd_started_by_task"] = True
+        self.docker = docker_cmd()
+        info = run([*self.docker, "info", "--format", "{{json .}}"], phase="dockerd", capture=True).stdout
+        info = json.loads(info)
+        self.facts["docker"] = {k: info.get(k) for k in ("ServerVersion", "Driver", "DockerRootDir", "NCPU", "MemTotal")}
+
+    def images(self):
+        if self.mode == "prepared" and self.lock:
+            for name, img in self.lock["images"].items():
+                tar = PREPARED / "images" / img["file"]
+                tag = img["tag"]
+                present = run([*self.docker, "image", "inspect", tag], phase="images", check=False,
+                              capture=True).returncode == 0
+                if not present:
+                    if not tar.exists() or sha256_file(tar) != img["tar_sha256"]:
+                        raise PhaseError("images", f"{tar} missing or checksum mismatch")
+                    run([*self.docker, "load", "-q", "-i", str(tar)], phase="images", timeout=300,
+                        log=self.logs / "images.log")
+                self.env[IMAGE_ENV[name]] = tag
+            self.facts["images_source"] = "preloaded-tar"
+        else:
+            if self.mode == "prepared":
+                self.cache_misses.append("images")
+            self.env["EVENTS_SVC_IMAGE"] = f"prepared-monorepo/events-svc:task-{self.run_id}"
+            self.facts["images_source"] = "registry-pull+source-build"
+
+    def write_env(self):
+        for port_env in ("PG14_PORT", "PG16_PORT", "PG17_PORT", "EVENTS_SVC_PORT"):
+            self.env[port_env] = str(free_port())
+        self.env.update({
+            "PGHOST": "127.0.0.1",
+            "PGUSER": "postgres",
+            "COMPOSE_PROJECT_NAME": f"oh-{self.run_id}".lower(),
+            "OH_COMPOSE_FILE": str(self.repo / "server" / "compose.yaml"),
+            "OH_COMPOSE_ENV_FILE": str(self.state_dir / "compose.env"),
+            "AUTH_MODE": os.environ["AUTH_MODE"],
+            "OH_TASK_DIR": str(self.task),
+            "OH_REPO": str(self.repo),
+        })
+        compose_vars = {k: v for k, v in self.env.items() if re.match(r"^(PG1[467]_(PORT|IMAGE)|EVENTS_SVC_(PORT|IMAGE))$", k)}
+        (self.state_dir / "compose.env").write_text("".join(f"{k}={v}\n" for k, v in sorted(compose_vars.items())))
+        (self.state_dir / "env.sh").write_text(
+            "# Source this file to use the task's databases and bundle. No secrets.\n"
+            + "".join(f"export {k}='{v}'\n" for k, v in sorted(self.env.items()))
+            + f"export COMPOSE_PROJECT_NAME='{self.env['COMPOSE_PROJECT_NAME']}'\n"
+            + f"export COMPOSE_FILE='{self.env['OH_COMPOSE_FILE']}'\n"
+            + f"export COMPOSE_ENV_FILES='{self.env['OH_COMPOSE_ENV_FILE']}'\n")
+
+    def compose(self) -> list[str]:
+        return compose_base(self.env, self.docker)
+
+    def services_db(self):
+        self.compose_started = True
+        if self.mode != "prepared" or "images" in self.cache_misses:
+            run([*self.compose(), "pull", "--quiet", "pg14", "pg16", "pg17"], phase="services_db", timeout=600,
+                log=self.logs / "compose.log")
+        run([*self.compose(), "up", "-d", "--wait", "--wait-timeout", "120", "pg14", "pg16", "pg17"],
+            phase="services_db", timeout=180, log=self.logs / "compose.log")
+
+    def fixtures(self) -> bool:
+        """Restore keyed fixtures. Returns True if restored, False if bootstrap is required."""
+        if self.mode != "prepared":
+            return False
+        manifest_path = PREPARED / "fixtures" / "manifest.json"
+        if not manifest_path.exists():
+            self.cache_misses.append("fixture/manifest")
+            return False
+        manifest = json.loads(manifest_path.read_text())
+        keys_py = PREPARED / "bin" / "keys.py"
+        mismatched = []
+        for logical in LOGICAL_DBS:
+            key = run(["python3", str(keys_py), "fixture", "--repo", str(self.repo), "--db", logical],
+                      phase="fixtures", capture=True).stdout.decode().strip()
+            if manifest["dbs"].get(logical, {}).get("key") != key:
+                mismatched.append(logical)
+        if mismatched:
+            self.cache_misses.extend(f"fixture/{d}" for d in mismatched)
+            self.facts["fixture_mismatch"] = mismatched
+            return False
+        compose = self.compose()
+        for logical, spec in LOGICAL_DBS.items():
+            entry = manifest["dbs"][logical]
+            for db in entry["databases"]:
+                dump = PREPARED / "fixtures" / logical / db["file"]
+                if sha256_file(dump) != db["sha256"]:
+                    raise PhaseError("fixtures", f"{dump} checksum mismatch")
+                run([*compose, "exec", "-T", spec["service"], "createdb", "-U", "postgres", db["name"]],
+                    phase="fixtures", log=self.logs / "restore.log")
+                run([*compose, "exec", "-T", spec["service"], "pg_restore", "-U", "postgres", "--no-owner",
+                     "--exit-on-error", "-d", db["name"]], phase="fixtures", stdin_file=dump, timeout=120,
+                    log=self.logs / "restore.log")
+        self.facts["fixtures_source"] = "restored"
+        return True
+
+    def services_events(self):
+        if self.mode != "prepared" or "images" in self.cache_misses:
+            run([*self.compose(), "build", "events-svc"], phase="services_events", timeout=1200,
+                log=self.logs / "compose.log")
+        run([*self.compose(), "up", "-d", "--wait", "--wait-timeout", "120", "events-svc"],
+            phase="services_events", timeout=180, log=self.logs / "compose.log")
+
+    def bootstrap(self):
+        env = dict(self.env)
+        env["BOOTSTRAP_ENVS"] = self.args.envs
+        run(["bin/rails", "dev:bootstrap"], phase="bootstrap", cwd=self.repo / "server", env=env, timeout=900,
+            log=self.logs / "bootstrap.log")
+        self.facts["fixtures_source"] = self.facts.get("fixtures_source") or "dev:bootstrap"
+
+    def verify_ready(self):
+        compose = self.compose()
+        manifest = None
+        if self.facts.get("fixtures_source") == "restored":
+            manifest = json.loads((PREPARED / "fixtures" / "manifest.json").read_text())
+        observed = {}
+        for logical, spec in LOGICAL_DBS.items():
+            for db in spec["databases"]:
+                if db.endswith("_development") and "development" not in self.args.envs.split(","):
+                    continue
+                counts = dict(l.split("=", 1) for l in psql_lines(compose, spec["service"], db, ROW_COUNTS_SQL,
+                                                                    phase="verify_ready"))
+                observed[db] = counts
+                if manifest:
+                    expected = next(d for d in manifest["dbs"][logical]["databases"] if d["name"] == db)["row_counts"]
+                    if counts != expected:
+                        raise PhaseError("verify_ready", f"{db}: row counts {counts} != manifest {expected}")
+        self.facts["row_counts"] = observed
+        port = self.env["EVENTS_SVC_PORT"]
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=5) as r:
+            self.facts["events_svc_health"] = json.loads(r.read())
+
+    # ---------- driver ----------
+    def write_state(self, state: str, error: str | None = None, failed_phase: str | None = None):
+        write_json(self.state_dir / "prepare.json", {
+            "state": state, "error": error, "failed_phase": failed_phase,
+            "classification": PHASE_CLASS.get(failed_phase, "ENV_UNKNOWN") if failed_phase else None,
+            "updated_at": now_iso(), "task_dir": str(self.task), "repo": str(self.repo),
+            "cache_misses": self.cache_misses, "phases": self.timeline.phases, "facts": self.facts,
+            "env": self.env, "image": {"ref": os.environ.get("OH_IMAGE_REF"), "lock_sha256":
+                                       sha256_file(PREPARED / "lock.json") if self.lock else None},
+        })
+
+    def rollback(self):
+        if self.compose_started and self.env.get("COMPOSE_PROJECT_NAME"):
+            run([*self.compose(), "down", "-v", "--remove-orphans", "--timeout", "10"], phase="rollback",
+                check=False, timeout=120, log=self.logs / "rollback.log")
+            self.facts["rolled_back"] = True
+
+    def execute(self) -> int:
+        self.state_dir.mkdir(parents=True, exist_ok=False)
+        self.logs.mkdir()
+        t0 = time.monotonic()
+        self.facts["started_at"] = now_iso()
+        self.write_state("PREPARING")
+        current = None
+        induced = _InducedFailure()
+        restored = False
+
+        def step(name):
+            nonlocal current
+            current = name
+            with self.timeline.phase(name):
+                result = getattr(self, name)()
+            induced.check(name)
+            return result
+
+        try:
+            for name in ("checkout", "auth_gate", "bundle", "dockerd", "images"):
+                step(name)
+            self.write_env()
+            step("services_db")
+            restored = step("fixtures")
+            step("services_events")
+            if not restored:
+                step("bootstrap")
+            step("verify_ready")
+        except PhaseError as e:
+            self.facts["total_seconds"] = round(time.monotonic() - t0, 3)
+            self.rollback()
+            self.write_state(f"FAILED/{e.phase}", str(e), e.phase)
+            print(f"prepare-workspace: FAILED in {e.phase}: {e}", file=sys.stderr)
+            return e.exit_code
+        except Exception as e:  # unexpected bug: still roll back and record
+            self.facts["total_seconds"] = round(time.monotonic() - t0, 3)
+            self.rollback()
+            self.write_state(f"FAILED/{current}", f"{type(e).__name__}: {e}", current)
+            raise
+        self.facts["total_seconds"] = round(time.monotonic() - t0, 3)
+        self.write_state("READY")
+        link = self.args.task_root / "current"
+        tmp = self.args.task_root / f".current-{self.run_id}"
+        tmp.symlink_to(self.task)
+        tmp.replace(link)
+        print(json.dumps({"state": "READY", "task_dir": str(self.task), "repo": str(self.repo),
+                          "env": str(self.state_dir / "env.sh"), "total_seconds": self.facts["total_seconds"],
+                          "cache_misses": self.cache_misses}))
+        return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--sha", required=True)
+    ap.add_argument("--mode", choices=["prepared", "cold"], default="prepared")
+    ap.add_argument("--run-id")
+    ap.add_argument("--task-root", type=Path, default=DEFAULT_TASK_ROOT)
+    ap.add_argument("--repo-url", default=os.environ.get("OH_REPO_URL", DEFAULT_REPO_URL))
+    ap.add_argument("--envs", default="development,test")
+    args = ap.parse_args()
+    if not re.fullmatch(r"[0-9a-f]{40}", args.sha):
+        print("prepare-workspace: --sha must be a full 40-character commit SHA", file=sys.stderr)
+        return 1
+    if args.run_id and not re.fullmatch(r"[A-Za-z0-9_-]{1,48}", args.run_id):
+        print("prepare-workspace: --run-id may contain only letters, digits, '-' and '_'", file=sys.stderr)
+        return 1
+    args.task_root.mkdir(parents=True, exist_ok=True)
+    return Prep(args).execute()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

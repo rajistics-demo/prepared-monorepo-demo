@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""Tear down one task's Compose project and (optionally) its task directory.
+
+  oh-cleanup --task <task-dir> [--remove-task-dir]
+
+Owned by the launcher, after verification and evidence retention. The coding
+agent must not run it. It only touches the named task's Compose project
+(containers, network, named volumes). It never prunes images, never touches
+other projects and never stops dockerd.
+"""
+import argparse
+import json
+import shutil
+import sys
+from pathlib import Path
+
+sys.path[:0] = ["/usr/local/lib/oh-prepared", str(Path(__file__).resolve().parent)]
+from oh_common import compose_base, docker_cmd, now_iso, run, write_json  # noqa: E402
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--task", required=True, type=Path)
+    ap.add_argument("--remove-task-dir", action="store_true")
+    args = ap.parse_args()
+    task = args.task.resolve()
+    state_path = task / "state" / "prepare.json"
+    if not state_path.exists():
+        print(f"oh-cleanup: no prepare.json under {task}", file=sys.stderr)
+        return 1
+    state = json.loads(state_path.read_text())
+    env = state.get("env") or {}
+    result = {"task_dir": str(task), "at": now_iso(), "compose_project": env.get("COMPOSE_PROJECT_NAME")}
+    if env.get("COMPOSE_PROJECT_NAME") and env.get("OH_COMPOSE_FILE") and Path(env["OH_COMPOSE_FILE"]).exists():
+        proc = run([*compose_base(env, docker_cmd()), "down", "-v", "--remove-orphans", "--timeout", "10"],
+                   phase="cleanup", check=False, timeout=180, log=task / "state" / "logs" / "cleanup.log")
+        result["compose_down_exit"] = proc.returncode
+    else:
+        result["compose_down_exit"] = None
+    write_json(task / "state" / "cleanup.json", result)
+    if args.remove_task_dir:
+        shutil.rmtree(task)
+        result["task_dir_removed"] = True
+    print(json.dumps(result))
+    return 0 if result["compose_down_exit"] in (0, None) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

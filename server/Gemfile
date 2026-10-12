@@ -1,0 +1,12 @@
+source "https://rubygems.org"
+
+ruby file: ".ruby-version"
+
+gem "railties", "8.1.4"
+gem "activerecord", "8.1.4"
+gem "actionpack", "8.1.4"
+gem "activemodel", "8.1.4"
+gem "activesupport", "8.1.4"
+# Compile pg against the system libpq (libpq-dev) rather than the prebuilt gem
+# that bundles its own libpq, so the bundle key tracks the native library.
+gem "pg", "1.7.0", force_ruby_platform: true

@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+"""Run one step of the red/green protocol and record evidence.
+
+  oh-phase baseline                      existing server suite at the current HEAD -> must be GREEN
+  oh-phase red   --tests <paths...>      new regression tests -> must be ASSERTION_RED,
+                                         with every failure inside <paths>
+  oh-phase green --tests <paths...>      the same tests after the fix -> must be GREEN
+  oh-phase suite                         full server suite -> must be GREEN
+
+Options: --task <task-dir> (default: <task-root>/current).
+Writes <task>/evidence/<phase>.json. Exit 0 only if the expectation is met.
+This evidence is informative; acceptance comes from oh-verify in a fresh sandbox.
+"""
+import argparse
+import sys
+from pathlib import Path
+
+sys.path[:0] = ["/usr/local/lib/oh-prepared", str(Path(__file__).resolve().parent)]
+from oh_common import (DEFAULT_TASK_ROOT, blob_shas, failures_within, load_task_env, now_iso,  # noqa: E402
+                       run_rails_tests, write_json)
+
+EXPECT = {"baseline": "GREEN", "red": "ASSERTION_RED", "green": "GREEN", "suite": "GREEN"}
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("phase", choices=sorted(EXPECT))
+    ap.add_argument("--tests", nargs="*", default=[])
+    ap.add_argument("--task", type=Path, default=DEFAULT_TASK_ROOT / "current")
+    args = ap.parse_args()
+    if args.phase in ("red", "green") and not args.tests:
+        ap.error(f"{args.phase} requires --tests")
+    task = args.task.resolve()
+    state = load_task_env(task)
+    paths = args.tests if args.phase in ("red", "green") else []
+    evidence = run_rails_tests(task, state, paths, args.phase)
+    expected = EXPECT[args.phase]
+    ok = evidence["classification"] == expected
+    if args.phase == "red":
+        ok = ok and failures_within(evidence, paths)
+    record = {
+        "phase": args.phase, "expected": expected, "ok": ok, "at": now_iso(),
+        "classification": evidence["classification"], "counts": evidence.get("counts"),
+        "head_sha": evidence["head_sha"], "tests": paths,
+        "test_blob_shas": blob_shas(task / "repo", "HEAD", [p if p.startswith("server/") else f"server/{p}" for p in paths]),
+        "exit_code": evidence["exit_code"], "seconds": evidence["seconds"], "evidence": evidence,
+        "note": "agent-produced evidence; informative only, not acceptance",
+    }
+    write_json(task / "evidence" / f"{args.phase}.json", record)
+    print(f"oh-phase {args.phase}: {evidence['classification']} (expected {expected}) -> {'OK' if ok else 'NOT MET'}")
+    for r in evidence.get("results", []):
+        if r["status"] in ("failure", "error"):
+            print(f"  {r['status'].upper()} {r['test']} [{r.get('failure_class')}] {r.get('message', '')[:300]}")
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

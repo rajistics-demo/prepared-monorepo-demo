@@ -1,0 +1,28 @@
+# account_id references primary-database accounts by id (no cross-database foreign key).
+acme_invoice_paid:
+  account_id: <%= ActiveRecord::FixtureSet.identify(:acme) %>
+  entry_type: credit
+  amount_cents: 12900
+  posted_on: 2026-09-01
+  memo: September subscription
+
+acme_refund:
+  account_id: <%= ActiveRecord::FixtureSet.identify(:acme) %>
+  entry_type: debit
+  amount_cents: 2500
+  posted_on: 2026-09-03
+  memo: Partial refund
+
+acme_addon:
+  account_id: <%= ActiveRecord::FixtureSet.identify(:acme) %>
+  entry_type: credit
+  amount_cents: 1500
+  posted_on: 2026-09-05
+  memo: Add-on
+
+umbrella_invoice_paid:
+  account_id: <%= ActiveRecord::FixtureSet.identify(:umbrella) %>
+  entry_type: credit
+  amount_cents: 45000
+  posted_on: 2026-09-10
+  memo: Annual plan

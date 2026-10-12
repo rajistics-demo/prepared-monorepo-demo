@@ -1,0 +1,43 @@
+# Three PostgreSQL majors, matching a multi-version production estate:
+#   primary -> PostgreSQL 16 (accounts, payments)
+#   ledger  -> PostgreSQL 14 (ledger entries, older cluster)
+#   events  -> PostgreSQL 17 (schema owned by services/events-svc; Rails never migrates it)
+# Ports bind to 127.0.0.1 only. Auth is trust inside the per-run Compose project; there are no passwords.
+default: &default
+  adapter: postgresql
+  encoding: unicode
+  host: <%= ENV.fetch("PGHOST", "127.0.0.1") %>
+  username: <%= ENV.fetch("PGUSER", "postgres") %>
+  pool: 5
+
+development:
+  primary:
+    <<: *default
+    port: <%= ENV.fetch("PG16_PORT", "54316") %>
+    database: server_primary_development
+  ledger:
+    <<: *default
+    port: <%= ENV.fetch("PG14_PORT", "54314") %>
+    database: server_ledger_development
+    migrations_paths: db/ledger_migrate
+  events:
+    <<: *default
+    port: <%= ENV.fetch("PG17_PORT", "54317") %>
+    database: server_events_development
+    database_tasks: false
+
+test:
+  primary:
+    <<: *default
+    port: <%= ENV.fetch("PG16_PORT", "54316") %>
+    database: server_primary_test
+  ledger:
+    <<: *default
+    port: <%= ENV.fetch("PG14_PORT", "54314") %>
+    database: server_ledger_test
+    migrations_paths: db/ledger_migrate
+  events:
+    <<: *default
+    port: <%= ENV.fetch("PG17_PORT", "54317") %>
+    database: server_events_test
+    database_tasks: false

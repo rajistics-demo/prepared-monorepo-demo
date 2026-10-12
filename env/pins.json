@@ -1,0 +1,27 @@
+{
+  "_comment": "Static build inputs. Digests were resolved from the registries on 2026-10-12. Changing any value changes the bundle and fixture keys, which forces an image rebuild.",
+  "agent_server_base": {
+    "ref": "ghcr.io/openhands/agent-server:1.50.1-python",
+    "index_digest": "sha256:3fb47bd7891f26e59f5124189f0d656e98a2a649b9419c07a518eb5492ffcaac",
+    "linux_amd64_digest": "sha256:56758362c614dac19842b02a61cb21220f3008321c0d8c75d881d617f6507129",
+    "config_digest": "sha256:562c2cabb4d4b43c77c2554109956bc7c4b57ec5df3383396bf21bdce2282068",
+    "debian_snapshot": "20260920T000000Z"
+  },
+  "ruby": {
+    "version": "3.4.11",
+    "tarball": "https://cache.ruby-lang.org/pub/ruby/3.4/ruby-3.4.11.tar.xz",
+    "sha256": "f79c6e789ce4f30f77c88a40b23b93e2547c512a843dc17db27ab1f5cc66f4e4"
+  },
+  "services": {
+    "pg14": {"ref": "postgres:14.24-bookworm", "index_digest": "sha256:5a05f61a534e50e679d27fb45953afec7821f2ffc2aa6c738b94515ca0891ac2", "linux_amd64_digest": "sha256:dc84be408a074d95deb782940fdf2509c423693614eea5b2f7d86452a3513f02", "major": 14},
+    "pg16": {"ref": "postgres:16.15-bookworm", "index_digest": "sha256:0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d07622a9a644946c7319c4", "linux_amd64_digest": "sha256:ec9f656f17c8b4dfebf49e58cf5c46d493d4846d4ea6d8b85d0637f68ee33bfc", "major": 16},
+    "pg17": {"ref": "postgres:17.11-bookworm", "index_digest": "sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826", "linux_amd64_digest": "sha256:66aafa11cf15800a3c94763f7e11d1e7b2e37e5e84bc4ce027cb6e1e4bfaf4df", "major": 17}
+  },
+  "events_svc_build": {
+    "rust": {"ref": "rust:1.98-slim-trixie", "index_digest": "sha256:4cd829461bd5c4d511c32e269da9cb8929223b666519d8004e35fc8d1d771ab7"},
+    "runtime": {"ref": "debian:trixie-slim", "index_digest": "sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f"}
+  },
+  "dev_ruby_image": {"ref": "ruby:3.4.11-slim-trixie", "index_digest": "sha256:c12225b6a73743f943530d9e610f4ae78e0dbcffdcf797b01522a55f7d25acb3"},
+  "gitleaks": {"ref": "ghcr.io/gitleaks/gitleaks:v8.30.1", "index_digest": "sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"},
+  "fixture_format_version": 1
+}

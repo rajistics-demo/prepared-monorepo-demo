@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Auth gate run by `bin/rails dev:bootstrap`. Fails closed (exit 78).
+#
+# AUTH_MODE must be set explicitly:
+#   none     Synthetic demo only. AWS auth is NOT checked. AWS SSO is NOT solved by this repo.
+#   aws-sso  Requires a live AWS IAM Identity Center (SSO) session for AWS_PROFILE.
+#            Static access keys in the environment are refused rather than treated as SSO.
+#            Never starts an interactive login; a human must run `aws sso login` first.
+set -u
+
+EX_CONFIG=78
+
+case "${AUTH_MODE:-}" in
+  none)
+    echo "auth-check: AUTH_MODE=none (synthetic demo). AWS authentication was NOT checked; AWS SSO remains unresolved." >&2
+    exit 0
+    ;;
+  aws-sso)
+    if [ -n "${AWS_ACCESS_KEY_ID:-}" ] || [ -n "${AWS_SECRET_ACCESS_KEY:-}" ] || [ -n "${AWS_SESSION_TOKEN:-}" ]; then
+      echo "auth-check: static AWS credential variables are present in the environment; refusing to treat them as an SSO session." >&2
+      exit "$EX_CONFIG"
+    fi
+    if [ -z "${AWS_PROFILE:-}" ]; then
+      echo "auth-check: AUTH_MODE=aws-sso requires AWS_PROFILE naming an SSO profile." >&2
+      exit "$EX_CONFIG"
+    fi
+    if ! command -v aws >/dev/null 2>&1; then
+      echo "auth-check: aws CLI not found; cannot verify an SSO session." >&2
+      exit "$EX_CONFIG"
+    fi
+    arn="$(aws sts get-caller-identity --profile "$AWS_PROFILE" --query Arn --output text 2>/dev/null)" || {
+      echo "auth-check: no valid SSO session for profile '$AWS_PROFILE'. A human must run: aws sso login --profile $AWS_PROFILE" >&2
+      exit "$EX_CONFIG"
+    }
+    case "$arn" in
+      arn:aws:sts::*:assumed-role/AWSReservedSSO_*) echo "auth-check: SSO session OK for profile '$AWS_PROFILE'." >&2; exit 0 ;;
+      *) echo "auth-check: caller identity is not an IAM Identity Center (SSO) role; refusing." >&2; exit "$EX_CONFIG" ;;
+    esac
+    ;;
+  "")
+    echo "auth-check: AUTH_MODE is not set. Set AUTH_MODE=none for the synthetic demo or AUTH_MODE=aws-sso." >&2
+    exit "$EX_CONFIG"
+    ;;
+  *)
+    echo "auth-check: unknown AUTH_MODE '${AUTH_MODE}'." >&2
+    exit "$EX_CONFIG"
+    ;;
+esac

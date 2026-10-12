@@ -1,0 +1,29 @@
+# Synthetic accounts.
+acme:
+  name: Acme Widgets
+  email: billing@acme.example
+  status: active
+  last_payment_at: 2026-09-01 12:00:00
+
+umbrella:
+  name: Umbrella Supplies
+  email: finance@umbrella.example
+  status: active
+  last_payment_at: 2026-09-10 08:30:00
+
+initech:
+  name: Initech
+  email: ap@initech.example
+  status: past_due
+  last_payment_at: 2026-08-15 09:00:00
+
+globex:
+  name: Globex
+  email: ops@globex.example
+  status: trial
+
+hooli:
+  name: Hooli
+  email: accounts@hooli.example
+  status: closed
+  last_payment_at: 2026-09-20 10:00:00

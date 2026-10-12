@@ -1,0 +1,59 @@
+# Services required by the Rails server. Start with an explicit project name so
+# each task gets its own containers, network and volumes:
+#   docker compose -p oh-<run_id> up -d --wait
+# All images are pinned by digest. PostgreSQL runs with image defaults
+# (fsync, full_page_writes and synchronous_commit stay on).
+x-pg-common: &pg-common
+  environment:
+    POSTGRES_HOST_AUTH_METHOD: trust
+  healthcheck:
+    test: ["CMD", "pg_isready", "-U", "postgres", "-d", "postgres"]
+    interval: 2s
+    timeout: 3s
+    retries: 30
+    start_period: 5s
+
+services:
+  pg14:
+    <<: *pg-common
+    image: ${PG14_IMAGE:-postgres:14.24-bookworm@sha256:5a05f61a534e50e679d27fb45953afec7821f2ffc2aa6c738b94515ca0891ac2}
+    ports: ["127.0.0.1:${PG14_PORT:-54314}:5432"]
+    volumes: ["pg14-data:/var/lib/postgresql/data"]
+
+  pg16:
+    <<: *pg-common
+    image: ${PG16_IMAGE:-postgres:16.15-bookworm@sha256:0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d07622a9a644946c7319c4}
+    ports: ["127.0.0.1:${PG16_PORT:-54316}:5432"]
+    volumes: ["pg16-data:/var/lib/postgresql/data"]
+
+  pg17:
+    <<: *pg-common
+    image: ${PG17_IMAGE:-postgres:17.11-bookworm@sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826}
+    ports: ["127.0.0.1:${PG17_PORT:-54317}:5432"]
+    volumes: ["pg17-data:/var/lib/postgresql/data"]
+
+  events-svc:
+    # Public synthetic stand-in for a private service image. It is NOT the
+    # customer's private ECR image, and no AWS credentials are involved.
+    image: ${EVENTS_SVC_IMAGE:-prepared-monorepo/events-svc:dev}
+    build:
+      context: ../services/events-svc
+    environment:
+      EVENTS_ADMIN_URL: postgres://postgres@pg17:5432/postgres
+      EVENTS_DATABASES: server_events_development,server_events_test
+      EVENTS_LISTEN: 0.0.0.0:8080
+    depends_on:
+      pg17:
+        condition: service_healthy
+    ports: ["127.0.0.1:${EVENTS_SVC_PORT:-18080}:8080"]
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/events-svc", "healthcheck"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+      start_period: 2s
+
+volumes:
+  pg14-data:
+  pg16-data:
+  pg17-data:

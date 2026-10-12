@@ -1,0 +1,160 @@
+# CI for the synthetic monorepo. Runs on GitHub-hosted runners only.
+#
+#   server-suite  the developer path: compose up, dev:bootstrap, full Rails suite (3 PostgreSQL majors)
+#   events-svc    cargo test for the Rust service
+#   verifier      on reference/* branches: env/image/oh-verify --mode cold on (base tag, test commit, fix commit)
+#                 must PASS, and the same verifier on the test commit alone must FAIL (negative control)
+name: ci
+
+on:
+  push:
+    branches: ["main", "reference/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AUTH_MODE: none
+
+jobs:
+  secret-scan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: gitleaks (full history)
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo \
+            -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/repo \
+            ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+            git --redact --no-banner --exit-code 1 /repo
+
+  server-suite:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Runner facts
+        run: |
+          nproc; free -g; df -h / /tmp; docker version --format '{{.Server.Version}}'; docker compose version
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq libpq-dev
+      - uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
+        with:
+          working-directory: server
+          bundler-cache: true
+      - name: Start services
+        working-directory: server
+        run: docker compose -p ci up -d --wait --wait-timeout 300
+      - name: dev:bootstrap (custom db:setup replacement)
+        working-directory: server
+        run: bin/rails dev:bootstrap
+      - name: Full server suite
+        working-directory: server
+        env:
+          EVIDENCE_JSON: tmp/evidence/ci-suite.json
+        run: bin/rails test
+      - name: Service logs on failure
+        if: failure()
+        working-directory: server
+        run: docker compose -p ci logs --no-color --tail 200
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: server-suite-evidence
+          path: server/tmp/evidence/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  events-svc:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    container:
+      image: rust:1.98-slim-trixie@sha256:4cd829461bd5c4d511c32e269da9cb8929223b666519d8004e35fc8d1d771ab7
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: cargo test --locked
+        working-directory: services/events-svc
+        run: cargo test --locked
+
+  verifier:
+    if: startsWith(github.ref, 'refs/heads/reference/') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq libpq-dev
+      - uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
+        with:
+          ruby-version: .ruby-version
+          working-directory: server
+      - name: Resolve SHAs
+        id: shas
+        run: |
+          git fetch --quiet --tags origin
+          base=$(git rev-parse 'demo/base-v1^{commit}')
+          head=$(git rev-parse HEAD)
+          test_sha=$(git rev-parse HEAD~1)
+          git merge-base --is-ancestor "$base" "$test_sha"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "test=$test_sha" >> "$GITHUB_OUTPUT"
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+          git diff --name-only "$base" "$test_sha" -- server/test | grep . > "$RUNNER_TEMP/tests.txt"
+          cat "$RUNNER_TEMP/tests.txt"
+      - name: oh-verify (expect PASS)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          env/image/oh-verify --mode cold --task-root "$RUNNER_TEMP/oh-tasks" \
+            --base ${{ steps.shas.outputs.base }} --test-sha ${{ steps.shas.outputs.test }} \
+            --head ${{ steps.shas.outputs.head }} --tests $(cat "$RUNNER_TEMP/tests.txt") \
+            --out "$RUNNER_TEMP/evidence/verify-pass.json"
+      - name: Negative control, test commit without the fix (expect FAIL/BEHAVIOR)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          env/image/oh-verify --mode cold --task-root "$RUNNER_TEMP/oh-tasks" \
+            --base ${{ steps.shas.outputs.base }} --test-sha ${{ steps.shas.outputs.test }} \
+            --head ${{ steps.shas.outputs.test }} --tests $(cat "$RUNNER_TEMP/tests.txt") \
+            --out "$RUNNER_TEMP/evidence/verify-negative.json"
+          rc=$?
+          set -e
+          python3 - "$RUNNER_TEMP/evidence/verify-negative.json" "$rc" <<'EOF'
+          import json, sys
+          r = json.load(open(sys.argv[1]))
+          assert sys.argv[2] == "1", f"expected exit 1, got {sys.argv[2]}"
+          assert r["verdict"] == "FAIL" and r.get("classification") == "BEHAVIOR", (r["verdict"], r.get("classification"))
+          assert r["steps"]["red_at_base"]["classification"] == "ASSERTION_RED"
+          print("negative control OK: unfixed head is rejected as BEHAVIOR")
+          EOF
+      - name: No verifier Compose projects left behind
+        if: always()
+        run: |
+          left=$(docker ps -a --filter label=com.docker.compose.project --format '{{.Label "com.docker.compose.project"}}' | grep '^oh-verify' || true)
+          test -z "$left" || { echo "leftover projects: $left"; exit 1; }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: verifier-evidence
+          path: |
+            ${{ runner.temp }}/evidence/
+            ${{ runner.temp }}/oh-tasks/*/state/
+            ${{ runner.temp }}/oh-tasks/*/repo/server/tmp/evidence/
+          retention-days: 14
+          if-no-files-found: warn

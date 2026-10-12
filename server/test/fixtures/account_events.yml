@@ -1,0 +1,18 @@
+# Rows in the events database (PostgreSQL 17). The table is created by services/events-svc.
+acme_signed_up:
+  account_id: <%= ActiveRecord::FixtureSet.identify(:acme) %>
+  kind: signed_up
+  payload: { plan: starter }
+  occurred_at: 2026-08-01 09:00:00
+
+acme_upgraded:
+  account_id: <%= ActiveRecord::FixtureSet.identify(:acme) %>
+  kind: plan_changed
+  payload: { from: starter, to: growth }
+  occurred_at: 2026-09-02 15:00:00
+
+umbrella_signed_up:
+  account_id: <%= ActiveRecord::FixtureSet.identify(:umbrella) %>
+  kind: signed_up
+  payload: { plan: annual }
+  occurred_at: 2026-07-20 11:00:00
