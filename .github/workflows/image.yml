@@ -1,0 +1,212 @@
+# Builds the prepared sandbox image on a GitHub-hosted runner (never on Rajistics,
+# never on a laptop) and, when publish=true, pushes NEW immutable tags to GHCR.
+#
+#   toolchain   FROM the pinned agent-server 1.50.1-python digest + Ruby + keyed gem bundle
+#   events-svc  Rust service image (synthetic stand-in for a private service image)
+#   fixtures    env/fixtures/build.sh through service containers on the runner
+#   prepared    toolchain + read-only seed + fixtures + service image tarballs + scripts
+#
+# Outputs (artifact `image-report`): lock.json, fixtures manifest, size report,
+# disk samples, base-vs-prepared config comparison.
+name: image
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Push the images to GHCR (new tags only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image
+  cancel-in-progress: false
+
+env:
+  BASE_IMAGE: ghcr.io/openhands/agent-server:1.50.1-python@sha256:56758362c614dac19842b02a61cb21220f3008321c0d8c75d881d617f6507129
+  SANDBOX_REPO: ghcr.io/rajistics-demo/prepared-monorepo-sandbox
+  EVENTS_REPO: ghcr.io/rajistics-demo/prepared-monorepo-events-svc
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    env:
+      REPORT: ${{ github.workspace }}/build/report
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Runner facts and disk headroom
+        run: |
+          mkdir -p "$REPORT"
+          { echo "nproc=$(nproc)"; free -b | sed -n 2p; df -B1 --output=size,used,avail / | tail -1; } | tee "$REPORT/runner-before.txt"
+          # Preinstalled SDKs this job never uses; removing them only affects this ephemeral runner.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -B1 --output=size,used,avail / | tail -1 | tee "$REPORT/runner-after-cleanup.txt"
+          echo "BASELINE_USED=$(df -B1 --output=used / | tail -1 | tr -d ' ')" >> "$GITHUB_ENV"
+          nohup bash -c 'while true; do echo "$(date +%s) $(df -B1 --output=used / | tail -1 | tr -d " ")"; sleep 2; done' \
+            > "$REPORT/disk-samples.txt" 2>/dev/null &
+          echo "SAMPLER_PID=$!" >> "$GITHUB_ENV"
+
+      - name: Tags
+        run: |
+          short="${GITHUB_SHA:0:12}"
+          echo "SHORT=$short" >> "$GITHUB_ENV"
+          echo "TAG=${short}-r${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
+
+      - name: Pull base by digest and record its config
+        run: |
+          docker pull --quiet --platform linux/amd64 "$BASE_IMAGE"
+          docker image inspect "$BASE_IMAGE" --format '{{json .Config}}' > "$REPORT/base-config.json"
+          docker image inspect "$BASE_IMAGE" --format '{{.Size}}' > "$REPORT/base-unpacked-bytes.txt"
+
+      - name: Build toolchain target
+        run: |
+          DOCKER_BUILDKIT=1 docker build --platform linux/amd64 -f env/image/Dockerfile \
+            --build-arg BASE_IMAGE="$BASE_IMAGE" --target toolchain -t "local/toolchain:$TAG" .
+
+      - name: Build events-svc
+        run: |
+          DOCKER_BUILDKIT=1 docker build --platform linux/amd64 -t "local/events-svc:$TAG" services/events-svc
+
+      - name: Fixtures through service containers
+        env:
+          TOOLCHAIN_IMAGE: local/toolchain:${{ env.TAG }}
+          EVENTS_SVC_IMAGE: local/events-svc:${{ env.TAG }}
+        run: env/fixtures/build.sh build/fixtures
+
+      - name: Assemble context (seed, service image tarballs, lock.json)
+        env:
+          SEED_SHA: ${{ github.sha }}
+          TOOLCHAIN_IMAGE: local/toolchain:${{ env.TAG }}
+          EVENTS_SVC_IMAGE: local/events-svc:${{ env.TAG }}
+          FIXTURES_DIR: build/fixtures
+          GITHUB_TOKEN: ${{ github.token }}
+        run: env/scripts/assemble-context.sh
+
+      - name: Secret scan of the image inputs (seed history, fixtures metadata, lock)
+        run: |
+          GL=ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+          docker run --rm -v "$PWD/build/context/seed/repo.git:/seed:ro" \
+            -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0='*' \
+            "$GL" git --redact --no-banner --exit-code 1 /seed
+          # Metadata files, plus the fixture dumps in SQL text form (the dumps themselves are binary).
+          mkdir -p build/fixture-sql
+          cp build/context/lock.json build/fixture-sql/lock.json
+          cp build/context/fixtures/manifest.json build/fixture-sql/manifest.json
+          for f in build/context/fixtures/*/*.dump; do
+            docker run --rm -i --entrypoint pg_restore \
+              postgres:17.11-bookworm@sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826 \
+              -f - < "$f" > "build/fixture-sql/$(basename "$f").sql"
+          done
+          docker run --rm -v "$PWD/build/fixture-sql:/sql:ro" "$GL" dir --redact --no-banner --exit-code 1 /sql
+
+      - name: Build prepared target
+        run: |
+          DOCKER_BUILDKIT=1 docker build --platform linux/amd64 -f env/image/Dockerfile \
+            --build-arg BASE_IMAGE="$BASE_IMAGE" --target prepared \
+            --label org.opencontainers.image.source="https://github.com/${GITHUB_REPOSITORY}" \
+            --label org.opencontainers.image.revision="$GITHUB_SHA" \
+            --label org.opencontainers.image.description="Synthetic prepared-monorepo demo sandbox (AUTH_MODE=none; AWS SSO not solved)" \
+            -t "$SANDBOX_REPO:$TAG" .
+
+      - name: Entrypoint, user and environment preserved
+        run: |
+          docker image inspect "$SANDBOX_REPO:$TAG" --format '{{json .Config}}' > "$REPORT/prepared-config.json"
+          python3 - "$REPORT/base-config.json" "$REPORT/prepared-config.json" <<'EOF'
+          import json, sys
+          base, new = (json.load(open(p)) for p in sys.argv[1:3])
+          for k in ("Entrypoint", "Cmd", "User", "WorkingDir", "ExposedPorts"):
+              assert base.get(k) == new.get(k), f"{k}: base={base.get(k)!r} prepared={new.get(k)!r}"
+          missing = set(base.get("Env") or []) - set(new.get("Env") or [])
+          assert not missing, f"base env entries changed or removed: {sorted(missing)}"
+          print("config preserved:", {k: base.get(k) for k in ("Entrypoint", "Cmd", "User", "WorkingDir")})
+          EOF
+
+      - name: Smoke test inside the image (no nested Docker)
+        run: |
+          docker run --rm --entrypoint /bin/bash "$SANDBOX_REPO:$TAG" -c 'set -eux
+            id; ruby -v; bundle -v; command -v prepare-workspace oh-verify oh-phase oh-cleanup
+            test -f /opt/prepared/lock.json; git -C /opt/prepared/seed/repo.git rev-parse refs/heads/main
+            if touch /opt/prepared/probe 2>/dev/null; then echo "/opt/prepared is writable by $(id -un)" >&2; exit 1; fi
+            key="$(python3 /opt/prepared/bin/keys.py bundle --repo /opt/prepared/src)"
+            test "$(readlink /opt/prepared/bundle/current)" = "$key"
+            cd /opt/prepared/src/server && BUNDLE_PATH="/opt/prepared/bundle/$key" BUNDLE_FROZEN=true \
+              BUNDLE_APP_CONFIG=/tmp/bc BUNDLE_USER_HOME=/tmp/bh bundle check'
+
+      - name: Sizes
+        run: |
+          kill "$SAMPLER_PID" || true
+          docker image inspect "$SANDBOX_REPO:$TAG" --format '{{.Size}}' > "$REPORT/prepared-unpacked-bytes.txt"
+          docker image inspect "local/toolchain:$TAG" --format '{{.Size}}' > "$REPORT/toolchain-unpacked-bytes.txt"
+          docker history --no-trunc --format '{{.Size}}\t{{.CreatedBy}}' "$SANDBOX_REPO:$TAG" | head -30 > "$REPORT/prepared-history.tsv"
+          du -sb build/context/images build/context/fixtures build/context/seed > "$REPORT/context-du.txt"
+          docker system df -v > "$REPORT/docker-system-df.txt" || true
+          cp build/context/lock.json build/fixtures/manifest.json "$REPORT/"
+          python3 - "$REPORT" "$BASELINE_USED" <<'EOF'
+          import json, sys
+          from pathlib import Path
+          r = Path(sys.argv[1]); baseline = int(sys.argv[2])
+          used = [int(l.split()[1]) for l in (r / "disk-samples.txt").read_text().split("\n") if l.strip()]
+          rep = {"base_unpacked_bytes": int((r / "base-unpacked-bytes.txt").read_text()),
+                 "toolchain_unpacked_bytes": int((r / "toolchain-unpacked-bytes.txt").read_text()),
+                 "prepared_unpacked_bytes": int((r / "prepared-unpacked-bytes.txt").read_text()),
+                 "runner_disk_peak_increase_bytes": (max(used) - baseline) if used else None,
+                 "disk_samples": len(used),
+                 "note": "unpacked = docker image inspect .Size (all layers, uncompressed). Compressed transfer size is "
+                         "recorded after push from the registry manifest. Peak increase includes build cache, "
+                         "intermediate images and pulled service images on this runner."}
+          (r / "sizes.json").write_text(json.dumps(rep, indent=2) + "\n")
+          print(json.dumps({k: (f"{v/1e9:.2f} GB" if isinstance(v, int) and v > 1e6 else v) for k, v in rep.items()}, indent=1))
+          EOF
+
+      - name: Push new tags (refuses to overwrite)
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          for ref in "$SANDBOX_REPO:$TAG" "$EVENTS_REPO:$TAG"; do
+            if docker manifest inspect "$ref" >/dev/null 2>&1; then echo "refusing to overwrite $ref" >&2; exit 1; fi
+          done
+          docker tag "local/events-svc:$TAG" "$EVENTS_REPO:$TAG"
+          docker push --quiet "$EVENTS_REPO:$TAG"
+          docker push --quiet "$SANDBOX_REPO:$TAG"
+          digest="$(docker image inspect "$SANDBOX_REPO:$TAG" --format '{{index .RepoDigests 0}}')"
+          echo "$digest" | tee "$REPORT/prepared-digest.txt"
+          docker image inspect "$EVENTS_REPO:$TAG" --format '{{index .RepoDigests 0}}' | tee "$REPORT/events-svc-digest.txt"
+          docker manifest inspect -v "$digest" > "$REPORT/prepared-manifest.json"
+          python3 - "$REPORT" "$BASE_IMAGE" <<'EOF'
+          import json, subprocess, sys
+          from pathlib import Path
+          r = Path(sys.argv[1])
+          def layers(ref):
+              m = json.loads(subprocess.run(["docker", "manifest", "inspect", "-v", ref], capture_output=True, text=True, check=True).stdout)
+              m = m[0] if isinstance(m, list) else m
+              return [(l["digest"], l["size"]) for l in m["OCIManifest" if "OCIManifest" in m else "SchemaV2Manifest"]["layers"]]
+          new = layers((r / "prepared-digest.txt").read_text().strip())
+          name, digest = sys.argv[2].split("@")
+          base = {d for d, _ in layers(name.rsplit(":", 1)[0] + "@" + digest)}
+          sizes = json.loads((r / "sizes.json").read_text())
+          sizes["prepared_compressed_bytes"] = sum(s for _, s in new)
+          sizes["prepared_compressed_bytes_not_in_base"] = sum(s for d, s in new if d not in base)
+          sizes["layers_total"], sizes["layers_shared_with_base"] = len(new), sum(1 for d, _ in new if d in base)
+          (r / "sizes.json").write_text(json.dumps(sizes, indent=2) + "\n")
+          print(json.dumps(sizes, indent=1))
+          EOF
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: image-report
+          path: build/report/
+          retention-days: 30
