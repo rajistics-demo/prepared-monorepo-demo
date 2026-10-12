@@ -45,6 +45,7 @@ rec = {
     "red_counts": red.get("counts"), "head_sha": red.get("head_sha"),
     "prepare_state": state.get("state"), "phase_seconds": state.get("phases"),
     "facts": state.get("facts"), "cache_misses": state.get("cache_misses"),
+    "prepare_stderr_tail": Path(f"/tmp/prep-{mode}.err").read_text(errors="replace").splitlines()[-15:],
     "valid": int(prep_rc) == 0 and red.get("classification") == "ASSERTION_RED" and bool(red.get("ok")),
 }
 Path(out).write_text(json.dumps(rec, indent=2) + "\n")

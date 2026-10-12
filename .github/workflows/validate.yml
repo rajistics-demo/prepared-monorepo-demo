@@ -131,6 +131,8 @@ jobs:
           [ $rc -ne 0 ] && grep -q '"verdict": "FAIL"' "$OUT/verify-negative.json"
 
       - name: Benchmark TTFMT, unprepared cold vs prepared cold (fresh sandbox each)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           source "$RUNNER_TEMP/start.sh"
           docker rm -f sbx-main >/dev/null; docker volume rm sbx-main-docker >/dev/null
