@@ -27,7 +27,9 @@ jobs:
           ruby -v
           bundle -v
           rm -f Gemfile.lock
-          bundle lock --add-platform x86_64-linux
+          bundle lock --add-platform x86_64-linux-gnu
+          others=$(ruby -rbundler -e 'puts Bundler::LockfileParser.new(File.read("Gemfile.lock")).platforms.map(&:to_s) - ["x86_64-linux-gnu"]')
+          if [ -n "$others" ]; then bundle lock --remove-platform $others; fi
           cat Gemfile.lock
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
