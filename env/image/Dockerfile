@@ -73,7 +73,7 @@ RUN set -eux; \
     python3 /opt/prepared/bin/keys.py bundle --repo /opt/prepared/src --json > "${dest}.key.json"; \
     rm -rf "$dest"/ruby/*/cache /tmp/bundle-config /tmp/bundle-home /root/.local/share/gem; \
     ln -sfn "$key" /opt/prepared/bundle/current; \
-    chmod -R a-w /opt/prepared
+    chmod -R a+rX,a-w /opt/prepared
 USER openhands
 WORKDIR /
 
@@ -87,7 +87,7 @@ COPY --chmod=0555 env/image/prepare-workspace env/image/oh-cleanup env/image/oh-
 COPY --chmod=0444 env/image/oh_common.py /usr/local/lib/oh-prepared/oh_common.py
 RUN set -eux; \
     chown -R root:root /opt/prepared; \
-    chmod -R a-w /opt/prepared; \
+    chmod -R a+rX,a-w /opt/prepared; \
     find /opt/prepared -type d -exec chmod 0555 {} +; \
     git config --system --add safe.directory /opt/prepared/seed/repo.git
 USER openhands

@@ -188,6 +188,11 @@ class Prep:
                         raise PhaseError("images", f"{tar} missing or checksum mismatch")
                     run([*self.docker, "load", "-q", "-i", str(tar)], phase="images", timeout=300,
                         log=self.logs / "images.log")
+                # Recorded, not enforced: the inner daemon's image store may compute IDs differently
+                # from the build host's, and the tarball was already verified against the lock.
+                self.facts.setdefault("image_ids", {})[name] = run(
+                    [*self.docker, "image", "inspect", "--format", "{{.Id}}", tag], phase="images",
+                    capture=True).stdout.decode().strip()
                 self.env[IMAGE_ENV[name]] = tag
             self.facts["images_source"] = "preloaded-tar"
         else:

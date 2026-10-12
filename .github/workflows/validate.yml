@@ -157,6 +157,15 @@ jobs:
           assert rep["valid"], "a benchmark run did not reach ASSERTION_RED"
           EOF
 
+      - name: Collect task state and logs on failure
+        if: failure()
+        run: |
+          for c in sbx-main bench-cold bench-prepared; do
+            docker inspect "$c" >/dev/null 2>&1 || continue
+            docker exec -u 0 "$c" sh -c 'cd /tmp && tar -czf /tmp/task-state.tgz --ignore-failed-read $(ls -d oh-*/*/state oh-*/*/evidence 2>/dev/null) 2>/dev/null; true'
+            docker cp "$c:/tmp/task-state.tgz" "$OUT/$c-task-state.tgz" 2>/dev/null || true
+          done
+
       - name: Teardown
         if: always()
         run: |

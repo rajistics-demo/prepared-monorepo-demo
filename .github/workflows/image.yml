@@ -144,6 +144,9 @@ jobs:
             test ! -e /tmp/clone/.git/objects/info/alternates
             git -C /tmp/clone cat-file -e "$(git -C /opt/prepared/seed/repo.git rev-parse refs/heads/main)^{commit}"
             if touch /opt/prepared/probe 2>/dev/null; then echo "/opt/prepared is writable by $(id -un)" >&2; exit 1; fi
+            unreadable="$(find /opt/prepared ! -perm -o=r -print | head -5)"
+            test -z "$unreadable" || { echo "not world-readable: $unreadable" >&2; exit 1; }
+            head -c 1 /opt/prepared/images/*.tar >/dev/null
             key="$(python3 /opt/prepared/bin/keys.py bundle --repo /opt/prepared/src)"
             test "$(readlink /opt/prepared/bundle/current)" = "$key"
             cd /opt/prepared/src/server && BUNDLE_PATH="/opt/prepared/bundle/$key" BUNDLE_FROZEN=true \
