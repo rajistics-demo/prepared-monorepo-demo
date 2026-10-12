@@ -69,12 +69,14 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          start() { docker run -d --privileged --name "$1" -v "$1-docker:/var/lib/docker" \
-            -e GITHUB_TOKEN -e AUTH_MODE=none -e OH_IMAGE_REF="$IMAGE" --entrypoint sleep "$IMAGE" infinity >/dev/null
-            docker cp env/scripts/isolation-probe.py "$1:/tmp/isolation-probe.py"
-            docker cp env/scripts/bench-ttfmt.sh "$1:/tmp/bench-ttfmt.sh"
-            docker cp "$RUNNER_TEMP/regression_test.rb" "$1:/tmp/regression_test.rb"
-            docker exec -u 0 "$1" chmod 0755 /tmp/isolation-probe.py /tmp/bench-ttfmt.sh; }
+          # start <name> [extra docker run args, e.g. resource limits]
+          start() { local n="$1"; shift
+            docker run -d --privileged --name "$n" "$@" -v "$n-docker:/var/lib/docker" \
+              -e GITHUB_TOKEN -e AUTH_MODE=none -e OH_IMAGE_REF="$IMAGE" --entrypoint sleep "$IMAGE" infinity >/dev/null
+            docker cp env/scripts/isolation-probe.py "$n:/tmp/isolation-probe.py"
+            docker cp env/scripts/bench-ttfmt.sh "$n:/tmp/bench-ttfmt.sh"
+            docker cp "$RUNNER_TEMP/regression_test.rb" "$n:/tmp/regression_test.rb"
+            docker exec -u 0 "$n" chmod 0755 /tmp/isolation-probe.py /tmp/bench-ttfmt.sh; }
           start sbx-main
           docker exec sbx-main sh -c 'id; sudo -n true && echo sudo-ok; command -v dockerd docker' | tee "$OUT/sandbox-user.txt"
           grep -q sudo-ok "$OUT/sandbox-user.txt"
@@ -136,24 +138,54 @@ jobs:
         run: |
           source "$RUNNER_TEMP/start.sh"
           docker rm -f sbx-main >/dev/null; docker volume rm sbx-main-docker >/dev/null
-          for mode in cold prepared; do
-            start "bench-$mode"
-            docker exec "bench-$mode" /tmp/bench-ttfmt.sh "$mode" ${{ steps.shas.outputs.base }} /tmp/regression_test.rb \
-              "$TEST_REL" "/tmp/bench-$mode.json" | tee -a "$OUT/bench-summary.jsonl"
-            docker cp "bench-$mode:/tmp/bench-$mode.json" "$OUT/"
-            docker exec "bench-$mode" sudo -n du -sb /var/lib/docker > "$OUT/bench-$mode-inner-docker-bytes.txt"
-            docker rm -f "bench-$mode" >/dev/null; docker volume rm "bench-$mode-docker" >/dev/null
+          # name:mode:limits. "constrained" mirrors the Rajistics default sandbox limits (1 CPU, 2048Mi, no swap);
+          # it is informative, not a gate.
+          set +e
+          for spec in "cold:cold:" "prepared:prepared:" "constrained:prepared:--cpus 1 --memory 2048m --memory-swap 2048m"; do
+            IFS=: read -r name mode limits <<< "$spec"
+            c="bench-$name"
+            # shellcheck disable=SC2086
+            start "$c" $limits
+            docker exec "$c" /tmp/bench-ttfmt.sh "$mode" ${{ steps.shas.outputs.base }} /tmp/regression_test.rb \
+              "$TEST_REL" "/tmp/bench-$name.json" | tee -a "$OUT/bench-summary.jsonl"
+            docker cp "$c:/tmp/bench-$name.json" "$OUT/"
+            docker exec "$c" sudo -n du -sb /var/lib/docker > "$OUT/$c-inner-docker-bytes.txt"
+            # Whole-sandbox cgroup (agent image + inner dockerd + all task containers).
+            docker exec "$c" sh -c 'echo "memory_peak_bytes $(cat /sys/fs/cgroup/memory.peak)"; grep -E "^(oom|oom_kill) " /sys/fs/cgroup/memory.events; grep usage_usec /sys/fs/cgroup/cpu.stat' \
+              > "$OUT/$c-cgroup.txt" 2>&1
+            docker inspect "$c" --format 'oom_killed={{.State.OOMKilled}} running={{.State.Running}}' >> "$OUT/$c-cgroup.txt"
+            docker rm -f "$c" >/dev/null; docker volume rm "$c-docker" >/dev/null
           done
+          set -e
           python3 - "$OUT" <<'EOF'
           import json, sys
           from pathlib import Path
           o = Path(sys.argv[1])
-          c, p = (json.loads((o / f"bench-{m}.json").read_text()) for m in ("cold", "prepared"))
+          def load(n):
+              f = o / f"bench-{n}.json"
+              return json.loads(f.read_text()) if f.exists() else {"valid": False, "ttfmt_seconds": None}
+          def cg(n):
+              f = o / f"bench-{n}-cgroup.txt"
+              out = {}
+              for line in (f.read_text().splitlines() if f.exists() else []):
+                  for part in line.split():
+                      if "=" in part:
+                          k, v = part.split("=", 1); out[k] = v
+                  bits = line.split()
+                  if len(bits) == 2 and bits[1].isdigit():
+                      out[bits[0]] = int(bits[1])
+              return out
+          c, p, k = load("cold"), load("prepared"), load("constrained")
           rep = {"headline": "unprepared cold vs prepared cold, same runner, same base SHA, same test, fresh inner Docker each",
                  "valid": c["valid"] and p["valid"],
                  "cold_ttfmt_seconds": c["ttfmt_seconds"], "prepared_ttfmt_seconds": p["ttfmt_seconds"],
-                 "speedup": round(c["ttfmt_seconds"] / p["ttfmt_seconds"], 2) if p["ttfmt_seconds"] else None,
-                 "prepared_cache_misses": p["cache_misses"],
+                 "speedup": round(c["ttfmt_seconds"] / p["ttfmt_seconds"], 2) if c["valid"] and p["valid"] else None,
+                 "prepared_cache_misses": p.get("cache_misses"),
+                 "cgroup": {n: cg(n) for n in ("cold", "prepared", "constrained")},
+                 "constrained_1cpu_2gib": {"valid": k["valid"], "ttfmt_seconds": k["ttfmt_seconds"],
+                                           "prepare_state": k.get("prepare_state"),
+                                           "stderr_tail": k.get("prepare_stderr_tail", [])[-5:],
+                                           "note": "informative: mirrors the Rajistics default sandbox limits; not a gate"},
                  "excluded": "image pull/transfer (see pull.json), sandbox scheduling, LLM time; n=1 per mode"}
           (o / "bench.json").write_text(json.dumps(rep, indent=2) + "\n"); print(json.dumps(rep, indent=1))
           assert rep["valid"], "a benchmark run did not reach ASSERTION_RED"
