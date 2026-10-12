@@ -24,6 +24,7 @@ coding conversation. Teardown after verification is the launcher's job
 Exit codes: 0 READY, 78 auth gate refused, 1 any other setup failure.
 """
 import argparse
+import fcntl
 import json
 import os
 import re
@@ -152,19 +153,24 @@ class Prep:
         self.env.update(base_env)
 
     def dockerd(self):
-        if run(["docker", "info"], phase="dockerd", check=False, capture=True).returncode != 0 and \
-           run(["sudo", "-n", "docker", "info"], phase="dockerd", check=False, capture=True).returncode != 0:
-            log = open(self.logs / "dockerd.log", "ab")
-            subprocess.Popen(["sudo", "-n", "dockerd"], stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-            deadline = time.monotonic() + 30
-            while time.monotonic() < deadline:
-                ok = run(["sudo", "-n", "docker", "info"], phase="dockerd", check=False, capture=True).returncode == 0
-                if ok:
-                    break
-                time.sleep(1)
-            else:
-                raise PhaseError("dockerd", "dockerd did not become ready within 30s")
-            self.facts["dockerd_started_by_task"] = True
+        # Two tasks preparing concurrently in one sandbox must not both launch a daemon.
+        with open("/tmp/oh-dockerd.lock", "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if run(["docker", "info"], phase="dockerd", check=False, capture=True).returncode != 0 and \
+               run(["sudo", "-n", "docker", "info"], phase="dockerd", check=False, capture=True).returncode != 0:
+                log = open(self.logs / "dockerd.log", "ab")
+                subprocess.Popen(["sudo", "-n", "dockerd"], stdout=log, stderr=subprocess.STDOUT,
+                                 start_new_session=True)
+                deadline = time.monotonic() + 30
+                while time.monotonic() < deadline:
+                    ok = run(["sudo", "-n", "docker", "info"], phase="dockerd", check=False,
+                             capture=True).returncode == 0
+                    if ok:
+                        break
+                    time.sleep(1)
+                else:
+                    raise PhaseError("dockerd", "dockerd did not become ready within 30s")
+                self.facts["dockerd_started_by_task"] = True
         self.docker = docker_cmd()
         info = run([*self.docker, "info", "--format", "{{json .}}"], phase="dockerd", capture=True).stdout
         info = json.loads(info)

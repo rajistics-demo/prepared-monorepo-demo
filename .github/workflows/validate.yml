@@ -1,0 +1,170 @@
+# M4: validate a published prepared image on a GitHub-hosted runner (off-laptop).
+# --privileged + a per-container volume for /var/lib/docker is the runner's stand-in for
+# Rajistics' Sysbox runtime; it proves the image's own behavior, not Rajistics isolation.
+name: validate
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: Prepared image by digest (ghcr.io/...@sha256:...)
+        required: true
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      IMAGE: ${{ inputs.image }}
+      OUT: ${{ github.workspace }}/validation
+      TEST_REL: server/test/queries/recently_paid_accounts_regression_test.rb
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve SHAs
+        id: shas
+        run: |
+          [[ "$IMAGE" =~ ^ghcr\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$ ]] || { echo "image must be pinned by digest" >&2; exit 1; }
+          git fetch -q origin reference/fix-recently-paid
+          base=$(git rev-parse 'demo/base-v1^{commit}')
+          head=$(git rev-parse FETCH_HEAD); test_sha=$(git rev-parse FETCH_HEAD~1)
+          git merge-base --is-ancestor "$base" "$test_sha"
+          git show "$test_sha:$TEST_REL" > "$RUNNER_TEMP/regression_test.rb"
+          { echo "base=$base"; echo "test=$test_sha"; echo "head=$head"; } | tee -a "$GITHUB_OUTPUT"
+          mkdir -p "$OUT"; nproc > "$OUT/runner-nproc.txt"; free -b > "$OUT/runner-mem.txt"; df -B1 / > "$OUT/runner-disk.txt"
+
+      - name: Pull image (timed)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          s=$(date +%s.%N); docker pull --quiet "$IMAGE"; e=$(date +%s.%N)
+          python3 -c "import sys,json;print(json.dumps({'pull_seconds':round(float(sys.argv[2])-float(sys.argv[1]),3)}))" "$s" "$e" | tee "$OUT/pull.json"
+          docker image inspect "$IMAGE" --format '{{.Size}}' > "$OUT/image-unpacked-bytes.txt"
+          docker logout ghcr.io
+
+      - name: Entrypoint preserved, agent-server answers
+        run: |
+          docker image inspect "$IMAGE" --format '{{json .Config.Entrypoint}} {{.Config.User}}' | tee "$OUT/entrypoint.txt"
+          grep -q '"tini","--","/usr/local/bin/openhands-agent-server"' "$OUT/entrypoint.txt"
+          docker run -d --name agent-entry -p 18080:8000 "$IMAGE" >/dev/null
+          for i in $(seq 1 60); do
+            for p in alive health; do
+              code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:18080/$p" || true)
+              if [ "$code" = 200 ]; then echo "/$p 200 after ${i}s" | tee "$OUT/entrypoint-health.txt"; break 2; fi
+            done; sleep 1
+          done
+          docker logs agent-entry > "$OUT/agent-entry.log" 2>&1 || true
+          docker rm -f agent-entry >/dev/null
+          test -s "$OUT/entrypoint-health.txt"
+
+      - name: Start sandbox stand-in
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          start() { docker run -d --privileged --name "$1" -v "$1-docker:/var/lib/docker" \
+            -e GITHUB_TOKEN -e AUTH_MODE=none -e OH_IMAGE_REF="$IMAGE" --entrypoint sleep "$IMAGE" infinity >/dev/null
+            docker cp env/scripts/isolation-probe.py "$1:/tmp/isolation-probe.py"
+            docker cp env/scripts/bench-ttfmt.sh "$1:/tmp/bench-ttfmt.sh"
+            docker cp "$RUNNER_TEMP/regression_test.rb" "$1:/tmp/regression_test.rb"
+            docker exec -u 0 "$1" chmod 0755 /tmp/isolation-probe.py /tmp/bench-ttfmt.sh; }
+          start sbx-main
+          docker exec sbx-main sh -c 'id; sudo -n true && echo sudo-ok; command -v dockerd docker' | tee "$OUT/sandbox-user.txt"
+          grep -q sudo-ok "$OUT/sandbox-user.txt"
+          declare -f start > "$RUNNER_TEMP/start.sh"
+
+      - name: Two concurrent prepared tasks + marker-write isolation probe
+        run: |
+          base=${{ steps.shas.outputs.base }}
+          docker exec sbx-main prepare-workspace --sha "$base" --run-id iso-a --task-root /tmp/oh-iso > "$OUT/prep-a.json" 2> "$OUT/prep-a.err" &
+          pa=$!
+          docker exec sbx-main prepare-workspace --sha "$base" --run-id iso-b --task-root /tmp/oh-iso > "$OUT/prep-b.json" 2> "$OUT/prep-b.err" &
+          pb=$!
+          ra=0; wait $pa || ra=$?; rb=0; wait $pb || rb=$?
+          echo "prepare exit a=$ra b=$rb"; cat "$OUT/prep-a.json" "$OUT/prep-b.json"
+          [ $ra -eq 0 ] && [ $rb -eq 0 ]
+          ta=$(python3 -c 'import json,sys;print(json.loads(open(sys.argv[1]).read().strip().splitlines()[-1])["task_dir"])' "$OUT/prep-a.json")
+          tb=$(python3 -c 'import json,sys;print(json.loads(open(sys.argv[1]).read().strip().splitlines()[-1])["task_dir"])' "$OUT/prep-b.json")
+          echo "TA=$ta" >> "$GITHUB_ENV"; echo "TB=$tb" >> "$GITHUB_ENV"
+          docker exec sbx-main python3 /tmp/isolation-probe.py "$ta" "$tb" | tee "$OUT/isolation-probe.json"
+
+      - name: Induced failure rolls back (OH_TEST_FAIL_AFTER=services_db)
+        run: |
+          set +e
+          docker exec -e OH_TEST_FAIL_AFTER=services_db sbx-main prepare-workspace --sha ${{ steps.shas.outputs.base }} \
+            --run-id fail-c --task-root /tmp/oh-iso > "$OUT/prep-fail.json" 2> "$OUT/prep-fail.err"
+          rc=$?; set -e
+          [ $rc -ne 0 ] || { echo "induced failure did not fail" >&2; exit 1; }
+          docker exec sbx-main cat /tmp/oh-iso/fail-c/state/prepare.json > "$OUT/prep-fail-state.json"
+          proj=$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d["state"]);print(d["env"].get("COMPOSE_PROJECT_NAME",""))' "$OUT/prep-fail-state.json" | tee /dev/stderr | tail -1)
+          grep -q '"state": "FAILED/services_db"' "$OUT/prep-fail-state.json"
+          left=$(docker exec sbx-main sudo -n docker ps -aq --filter "label=com.docker.compose.project=$proj" | wc -l)
+          vols=$(docker exec sbx-main sudo -n docker volume ls -q --filter "label=com.docker.compose.project=$proj" | wc -l)
+          echo "{\"project\":\"$proj\",\"containers_left\":$left,\"volumes_left\":$vols}" | tee "$OUT/rollback-check.json"
+          [ "$left" -eq 0 ] && [ "$vols" -eq 0 ]
+
+      - name: Cleanup both tasks, nothing left behind
+        run: |
+          for t in "$TA" "$TB"; do docker exec sbx-main oh-cleanup --task "$t" --remove-task-dir; done
+          docker exec sbx-main sudo -n docker ps -a --format '{{.Names}}' | tee "$OUT/after-cleanup-containers.txt"
+          docker exec sbx-main sudo -n docker volume ls -q | tee "$OUT/after-cleanup-volumes.txt"
+          [ ! -s "$OUT/after-cleanup-containers.txt" ] && [ ! -s "$OUT/after-cleanup-volumes.txt" ]
+          docker exec sbx-main sudo -n du -sb /var/lib/docker | tee "$OUT/inner-docker-root-bytes.txt"
+
+      - name: oh-verify in the image, prepared mode (PASS, then negative control)
+        run: |
+          s=${{ steps.shas.outputs.base }} t=${{ steps.shas.outputs.test }} h=${{ steps.shas.outputs.head }}
+          docker exec sbx-main oh-verify --mode prepared --task-root /tmp/oh-verify --base "$s" --test-sha "$t" --head "$h" \
+            --tests "$TEST_REL" --out /tmp/verify-pass.json
+          set +e
+          docker exec sbx-main oh-verify --mode prepared --task-root /tmp/oh-verify --base "$s" --test-sha "$t" --head "$t" \
+            --tests "$TEST_REL" --out /tmp/verify-negative.json
+          rc=$?; set -e
+          docker cp sbx-main:/tmp/verify-pass.json "$OUT/"; docker cp sbx-main:/tmp/verify-negative.json "$OUT/"
+          [ $rc -ne 0 ] && grep -q '"verdict": "FAIL"' "$OUT/verify-negative.json"
+
+      - name: Benchmark TTFMT, unprepared cold vs prepared cold (fresh sandbox each)
+        run: |
+          source "$RUNNER_TEMP/start.sh"
+          docker rm -f sbx-main >/dev/null; docker volume rm sbx-main-docker >/dev/null
+          for mode in cold prepared; do
+            start "bench-$mode"
+            docker exec "bench-$mode" /tmp/bench-ttfmt.sh "$mode" ${{ steps.shas.outputs.base }} /tmp/regression_test.rb \
+              "$TEST_REL" "/tmp/bench-$mode.json" | tee -a "$OUT/bench-summary.jsonl"
+            docker cp "bench-$mode:/tmp/bench-$mode.json" "$OUT/"
+            docker exec "bench-$mode" sudo -n du -sb /var/lib/docker > "$OUT/bench-$mode-inner-docker-bytes.txt"
+            docker rm -f "bench-$mode" >/dev/null; docker volume rm "bench-$mode-docker" >/dev/null
+          done
+          python3 - "$OUT" <<'EOF'
+          import json, sys
+          from pathlib import Path
+          o = Path(sys.argv[1])
+          c, p = (json.loads((o / f"bench-{m}.json").read_text()) for m in ("cold", "prepared"))
+          rep = {"headline": "unprepared cold vs prepared cold, same runner, same base SHA, same test, fresh inner Docker each",
+                 "valid": c["valid"] and p["valid"],
+                 "cold_ttfmt_seconds": c["ttfmt_seconds"], "prepared_ttfmt_seconds": p["ttfmt_seconds"],
+                 "speedup": round(c["ttfmt_seconds"] / p["ttfmt_seconds"], 2) if p["ttfmt_seconds"] else None,
+                 "prepared_cache_misses": p["cache_misses"],
+                 "excluded": "image pull/transfer (see pull.json), sandbox scheduling, LLM time; n=1 per mode"}
+          (o / "bench.json").write_text(json.dumps(rep, indent=2) + "\n"); print(json.dumps(rep, indent=1))
+          assert rep["valid"], "a benchmark run did not reach ASSERTION_RED"
+          EOF
+
+      - name: Teardown
+        if: always()
+        run: |
+          for c in agent-entry sbx-main bench-cold bench-prepared; do docker rm -f "$c" >/dev/null 2>&1 || true; docker volume rm "$c-docker" >/dev/null 2>&1 || true; done
+          docker ps -a; docker volume ls
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: validation-${{ github.run_id }}
+          path: validation/
+          retention-days: 30
