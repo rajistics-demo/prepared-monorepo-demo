@@ -1,0 +1,36 @@
+# Regenerates server/Gemfile.lock inside the pinned Ruby image and uploads it as
+# an artifact for a human or agent to review and commit. It never pushes.
+name: lockfile
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["bootstrap/lockfile"]
+
+permissions:
+  contents: read
+
+jobs:
+  lock:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    container:
+      image: ruby:3.4.11-slim-trixie@sha256:c12225b6a73743f943530d9e610f4ae78e0dbcffdcf797b01522a55f7d25acb3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Resolve Gemfile.lock for x86_64-linux
+        working-directory: server
+        run: |
+          set -eu
+          ruby -v
+          bundle -v
+          rm -f Gemfile.lock
+          bundle lock --add-platform x86_64-linux
+          cat Gemfile.lock
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gemfile-lock
+          path: server/Gemfile.lock
+          retention-days: 7
