@@ -1,0 +1,13 @@
+# Used only for the image-input scan in image.yml (lock.json, fixture manifest, fixture SQL).
+# The default ruleset applies; the single exception is content-addressed cache keys and
+# digests in the two metadata files, which are sha256 hashes of public inputs, not secrets.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "sha256 cache keys and digests in lock.json / fixture manifest.json"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)(lock|manifest)\.json$''']
+regexTarget = "secret"
+regexes = ['''^[0-9a-f]{64}$''']

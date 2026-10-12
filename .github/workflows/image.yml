@@ -108,7 +108,10 @@ jobs:
               postgres:17.11-bookworm@sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826 \
               -f - < "$f" > "build/fixture-sql/$(basename "$f").sql"
           done
-          docker run --rm -v "$PWD/build/fixture-sql:/sql:ro" "$GL" dir --redact --no-banner --exit-code 1 /sql
+          # Redacted findings (rule, file, line; never the value) go to the log and the report.
+          docker run --rm -v "$PWD/build/fixture-sql:/sql:ro" -v "$PWD/env/security:/cfg:ro" -v "$REPORT:/report" \
+            --user "$(id -u):$(id -g)" "$GL" dir --redact --verbose --no-banner --exit-code 1 \
+            --config /cfg/gitleaks-image-inputs.toml --report-format json --report-path /report/gitleaks-image-inputs.json /sql
 
       - name: Build prepared target
         run: |
