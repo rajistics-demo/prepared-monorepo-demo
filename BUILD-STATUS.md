@@ -6,7 +6,8 @@ Plan: `/Users/rajiv.shah/Code/install_replicate/demo-plans/root-monorepo/technic
 
 ## Current milestone
 
-**M2 done, with real CI evidence. M3 next: fixtures, toolchain and prepared images, size report.**
+**M3 in progress: the `image.yml` run is iterating on GitHub runners. M4 (`validate.yml`) is written and waits
+for the first published image digest.**
 The cold-path CI timings below are CI facts only. They are not the benchmark: no
 prepared-vs-cold measurement exists yet.
 
@@ -15,8 +16,8 @@ prepared-vs-cold measurement exists yet.
 | M0 Repo + Gemfile.lock resolved in CI | done | runs [38303322879](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38303322879), [38303482984](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38303482984) (`bootstrap/lockfile`); Ruby 3.4.11, Bundler 2.6.9, `x86_64-linux-gnu` only |
 | M1 Rails server, events-svc (Rust), env tooling | done | `main` @ `5263a4b` |
 | M2 CI: secret scan, server suite on PG 14/16/17, cargo test, red/green verifier + negative control | **done** | [run 38305813482](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38305813482) (`main`), [run 38305818289](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38305818289) (`reference/fix-recently-paid`), artifact `verifier-evidence` |
-| M3 Fixtures, toolchain + prepared images, size report | next | none yet |
-| M4 In-image validation (nested dockerd, prepared mode, isolation probe, induced-failure rollback, cold vs prepared timing) | todo | none yet |
+| M3 Fixtures, toolchain + prepared images, size report | **in progress** | See "M3 run log" below |
+| M4 In-image validation (nested dockerd, prepared mode, isolation probe, induced-failure rollback, cold vs prepared timing) | written, not run | `.github/workflows/validate.yml`, `env/scripts/bench-ttfmt.sh` |
 | M5 Proposed Rajistics registration config + peak-disk evidence for Codex review | todo | none yet |
 
 ### M2 verifier evidence (run 38305818289, `oh-verify --mode cold` on a GitHub runner)
@@ -35,6 +36,28 @@ prepared-vs-cold measurement exists yet.
 - **Cold mode only:** both runs used a network clone, a task-local `bundle install` and `dev:bootstrap`.
   Prepare took 68-146 s per task on the runner. These are not benchmark numbers.
 - **Not shown:** that the test would pass on SQLite. That is reasoned from NULL ordering, not run.
+
+### M3 run log (`image.yml`, workflow_dispatch, publish=true; nothing is pushed unless every gate passes)
+
+Step times on `ubuntu-24.04`: base pull ~47 s, toolchain (Ruby compile + bundle) ~6 min,
+events-svc ~1 min, fixtures ~1 min.
+
+| Run | Commit | Result | Fix |
+|---|---|---|---|
+| [38306993980](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38306993980) | `ffaf115` | Fixtures built for all 3 DBs, then cleanup failed: root-owned files in the temp checkout | `540d8b1`: the bootstrap container hands `/src` back to the runner UID in an EXIT trap |
+| [38308202521](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38308202521) | `540d8b1` | Seed history scan clean; fixture/metadata scan reported 7 findings | `4e53325`: verbose, redacted report, plus a narrow allowlist (see below) |
+| [38309317972](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38309317972) | `4e53325` | Scans clean, prepared image built, entrypoint preserved; smoke test failed: git refused the root-owned seed as dubious ownership as `openhands` | `54706f0`: `git config --system safe.directory` for only `/opt/prepared/seed/repo.git`; smoke test now runs the real no-hardlinks clone and checks there are no alternates |
+| [38310817702](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38310817702) | `54706f0` | running | |
+
+**Secret-scan allowlist** (`env/security/gitleaks-image-inputs.toml`, used only by the image-input scan):
+
+- Scope: `generic-api-key` matches whose value is a pure 64-hex sha256, in `lock.json`/`manifest.json` only (AND condition).
+- These are content-addressed cache keys of public inputs.
+- With it applied, all 7 findings disappeared, and the fixture SQL was clean under default rules.
+- The repo-history scan still uses the default rules, with no allowlist.
+
+`prepare-workspace` also now serializes its "start dockerd if absent" check with a file lock, so two tasks
+preparing concurrently in one sandbox cannot both launch a daemon (needed by the M4 isolation probe).
 
 ### History note
 
@@ -107,20 +130,17 @@ anything consumed it, and the reference branch was rebased onto it. `main` was n
 
 ## Next steps
 
-1. CI `image.yml` (M3):
-   - Build the toolchain image.
-   - Build the fixtures through service containers.
-   - Publish events-svc to GHCR.
-   - Assemble the context and build the prepared image FROM the pinned base.
-   - Push new, immutable tags.
-   - Record compressed size, unpacked size and runner disk usage.
-2. In-image validation workflow (M4, `validate-image.sh`):
-   - nested dockerd
-   - prepared-mode prepare
-   - isolation probe
-   - induced-failure rollback
-   - `oh-verify --mode prepared`
-   - cold vs prepared timings on the same runner class
+1. Finish M3: get one green `image.yml` run, then record the digest, compressed and unpacked sizes, and peak
+   runner disk from its `image-report` artifact.
+2. M4: dispatch `validate.yml` with `image=<that digest>`. On a GitHub runner, `--privileged` plus a
+   per-container `/var/lib/docker` volume stands in for Sysbox. It checks:
+   - entrypoint health
+   - `sudo` and `dockerd`
+   - two concurrent prepared tasks plus the marker-write isolation probe
+   - induced failure at `services_db`, leaving no containers or volumes
+   - `oh-cleanup` leaving nothing behind
+   - `oh-verify --mode prepared` PASS plus the negative control
+   - TTFMT benchmark: unprepared cold vs prepared cold, each in a fresh sandbox, same runner and base SHA, n=1
 
 ## Blockers / open risks
 

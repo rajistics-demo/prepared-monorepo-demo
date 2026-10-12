@@ -31,9 +31,8 @@ jobs:
         id: shas
         run: |
           [[ "$IMAGE" =~ ^ghcr\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$ ]] || { echo "image must be pinned by digest" >&2; exit 1; }
-          git fetch -q origin reference/fix-recently-paid
           base=$(git rev-parse 'demo/base-v1^{commit}')
-          head=$(git rev-parse FETCH_HEAD); test_sha=$(git rev-parse FETCH_HEAD~1)
+          head=$(git rev-parse origin/reference/fix-recently-paid); test_sha=$(git rev-parse "$head~1")
           git merge-base --is-ancestor "$base" "$test_sha"
           git show "$test_sha:$TEST_REL" > "$RUNNER_TEMP/regression_test.rb"
           { echo "base=$base"; echo "test=$test_sha"; echo "head=$head"; } | tee -a "$GITHUB_OUTPUT"
