@@ -1,23 +1,26 @@
 # Build status: prepared-monorepo-demo
 
-Last updated: 2026-10-12 (Opus 5.5 in Agent Canvas; Codex supervising).
+Last updated: 2026-10-12, after M4 run 38316367328 (Opus 5.5 in Agent Canvas; Codex supervising).
 Plan: `/Users/rajiv.shah/Code/install_replicate/demo-plans/root-monorepo/technical-plan.md`
 (+ `evidence-and-decisions.md`). This file is the single place to check progress.
 
 ## Current milestone
 
-**M3 in progress: the `image.yml` run is iterating on GitHub runners. M4 (`validate.yml`) is written and waits
-for the first published image digest.**
-The cold-path CI timings below are CI facts only. They are not the benchmark: no
-prepared-vs-cold measurement exists yet.
+**M3 and M4 done on GitHub-hosted runners. Next is M5: the proposed Rajistics registration config for Codex
+review. Nothing has been registered or pulled on Rajistics.**
+
+- **Current image:** `ghcr.io/rajistics-demo/prepared-monorepo-sandbox@sha256:b56261749a2f17542e45182f6006d1909f0e8fd03b46c919b2a58bc60a4fd9e0`.
+- **Benchmark headline** (run 38316367328, n=1): TTFMT 136.3 s unprepared-cold vs 47.3 s prepared-cold (2.9x).
+- **Benchmark scope:** synthetic repo, 2 vCPU GitHub runner, `--privileged` nested Docker. This is not a Rajistics
+  or Root number.
 
 | Milestone | State | Evidence |
 |---|---|---|
 | M0 Repo + Gemfile.lock resolved in CI | done | runs [38303322879](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38303322879), [38303482984](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38303482984) (`bootstrap/lockfile`); Ruby 3.4.11, Bundler 2.6.9, `x86_64-linux-gnu` only |
 | M1 Rails server, events-svc (Rust), env tooling | done | `main` @ `5263a4b` |
 | M2 CI: secret scan, server suite on PG 14/16/17, cargo test, red/green verifier + negative control | **done** | [run 38305813482](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38305813482) (`main`), [run 38305818289](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38305818289) (`reference/fix-recently-paid`), artifact `verifier-evidence` |
-| M3 Fixtures, toolchain + prepared images, size report | **in progress** | See "M3 run log" below |
-| M4 In-image validation (nested dockerd, prepared mode, isolation probe, induced-failure rollback, cold vs prepared timing) | written, not run | `.github/workflows/validate.yml`, `env/scripts/bench-ttfmt.sh` |
+| M3 Fixtures, toolchain + prepared images, size report | **done** | [run 38314542594](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38314542594), artifact `image-report`; see "M3 run log" |
+| M4 In-image validation (nested dockerd, prepared mode, isolation probe, induced-failure rollback, cold vs prepared timing) | **done** | [run 38316367328](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38316367328), artifact `validation-38316367328`; see "M4 evidence" |
 | M5 Proposed Rajistics registration config + peak-disk evidence for Codex review | todo | none yet |
 
 ### M2 verifier evidence (run 38305818289, `oh-verify --mode cold` on a GitHub runner)
@@ -47,13 +50,14 @@ events-svc ~1 min, fixtures ~1 min.
 | [38306993980](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38306993980) | `ffaf115` | Fixtures built for all 3 DBs, then cleanup failed: root-owned files in the temp checkout | `540d8b1`: the bootstrap container hands `/src` back to the runner UID in an EXIT trap |
 | [38308202521](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38308202521) | `540d8b1` | Seed history scan clean; fixture/metadata scan reported 7 findings | `4e53325`: verbose, redacted report, plus a narrow allowlist (see below) |
 | [38309317972](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38309317972) | `4e53325` | Scans clean, prepared image built, entrypoint preserved; smoke test failed: git refused the root-owned seed as dubious ownership as `openhands` | `54706f0`: `git config --system safe.directory` for only `/opt/prepared/seed/repo.git`; smoke test now runs the real no-hardlinks clone and checks there are no alternates |
-| [38310817702](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38310817702) | `54706f0` | **green: every gate passed, images pushed** | |
+| [38310817702](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38310817702) | `54706f0` | Green, pushed `…@sha256:3bd778…`. **Superseded:** M4 found its tarballs unreadable by `openhands` (`docker save` writes mode 0600 and `COPY` keeps it) | `b6143b6`: `chmod a+rX,a-w`, plus a smoke gate that every file under `/opt/prepared` is world-readable |
+| [38314542594](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38314542594) | `b6143b6` | **green, pushed; current image** | |
 
-**M3 outputs (run 38310817702, artifact `image-report`):**
+**M3 outputs (run 38314542594, artifact `image-report`):**
 
-- **Prepared image:** `ghcr.io/rajistics-demo/prepared-monorepo-sandbox@sha256:3bd77810511472c318ac3348fd60bc461d8580d98a033f1493a124164a8fe377`
-  (tag `54706f05e794-r38310817702-1`)
-- **events-svc:** `ghcr.io/rajistics-demo/prepared-monorepo-events-svc@sha256:306f36710a2a9ceacd442053fef46af294406a175f455a48dd1678f0cb440614`
+- **Prepared image:** `ghcr.io/rajistics-demo/prepared-monorepo-sandbox@sha256:b56261749a2f17542e45182f6006d1909f0e8fd03b46c919b2a58bc60a4fd9e0`
+- **events-svc:** `ghcr.io/rajistics-demo/prepared-monorepo-events-svc@sha256:d493cf9b3c381521b2500cb68f01b963818dad17c1d6eeb9c43d4122b8cac6ba`
+- **Superseded digest:** `@sha256:3bd77810…` (run 38310817702) is left in GHCR, immutable. Do not use it.
 - **Sizes** (measured):
 
   | Measure | Size |
@@ -80,6 +84,45 @@ events-svc ~1 min, fixtures ~1 min.
 `prepare-workspace` also now serializes its "start dockerd if absent" check with a file lock, so two tasks
 preparing concurrently in one sandbox cannot both launch a daemon (needed by the M4 isolation probe).
 
+### M4 evidence (`validate.yml` run 38316367328 on image `@sha256:b5626174…`)
+
+**Environment.** A GitHub-hosted `ubuntu-24.04` runner: 2 vCPU, 8 GB RAM. Each "sandbox" is
+`docker run --privileged` of the prepared image with its own `/var/lib/docker` volume, running as `openhands`
+(passwordless `sudo` for `dockerd`). This stands in for Rajistics' Sysbox runtime. It proves the image's behavior,
+not Rajistics scheduling, isolation or credentials. Fresh pull of the 2.27 GB image took 76-119 s across runs, and
+pull time is excluded from TTFMT.
+
+| Check | Result |
+|---|---|
+| Entrypoint `tini -- openhands-agent-server`, user `openhands` | preserved; `/alive` 200 after ~6 s. With no args it binds `127.0.0.1:8000` (base behavior; the runtime supplies host and port) |
+| Two concurrent prepared tasks, one daemon | both `READY` (46-66 s each, concurrent on 2 vCPU), no cache misses |
+| Marker-write isolation probe (primary / ledger / events test DBs) | each task sees only its own marker in all 3 DBs. Distinct Compose projects, containers, volumes, ports and checkouts |
+| Induced failure (`OH_TEST_FAIL_AFTER=services_db`) | `FAILED/services_db`, classified `ENV_SERVICES`, rolled back; 0 containers and 0 volumes left for that project |
+| `oh-cleanup --remove-task-dir` on both tasks | no containers or volumes left in the inner daemon |
+| `oh-verify --mode prepared` (B=`5263a4b`, T=`b8b1229`, H=`a564810`) | **PASS** in 34 s. RED and GREEN each ran as a new task with fixtures `restored`, a `seed` checkout and a new Compose project |
+| Negative control (H=T) | **FAIL / BEHAVIOR** |
+
+**Benchmark: time to first meaningful test (TTFMT).** The clock starts before `prepare-workspace` and stops when the
+regression test is classified `ASSERTION_RED` at base. Both modes ran on the same runner, at the same base SHA,
+with the same test file, each in a fresh sandbox with an empty inner Docker. n=1 per mode.
+
+| Phase (s) | checkout | bundle | dockerd | images | services_db | fixtures | services_events | bootstrap | verify_ready | first test | **TTFMT** |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| unprepared cold | 0.7 (network) | 42.3 (install) | 1.3 | 0 | 24.1 (pull) | 0 | 59.5 (Rust build) | 5.5 | 1.1 | 1.5 | **136.3** |
+| prepared cold | 0.0 (seed) | 0.5 | 0.9 | 27.5 (`docker load`) | 9.8 | 2.9 (restore) | 2.9 | none | 0.8 | 1.5 | **47.3** |
+
+What the benchmark shows and does not show:
+
+- **Remaining prepared cost:** loading 1.4 GB of service-image tarballs into the empty inner daemon. That is the
+  next optimization target, for example a pre-seeded inner data root or a node-local registry mirror. Neither
+  has been tried yet.
+- **Variance:** the earlier run 38315715872 measured prepared TTFMT at 35.0 s. n=1 is not enough for a stable
+  number, so repeat it before quoting.
+- **Synthetic scale:** the bundle, fixtures and bootstrap are small. Root's real bundle and bootstrap are
+  described as slow, so the absolute cold numbers here are not predictive for Root.
+- **Inner-Docker disk:** 4.06 GB in the prepared bench sandbox and 4.67 GB in the cold one, in addition to the
+  6.24 GB unpacked image.
+
 ### History note
 
 `demo/base-v1` was first created at `fe74411`, where `server/bin/*` lacked the executable bit, so setup could
@@ -100,8 +143,13 @@ anything consumed it, and the reference branch was rebased onto it. `main` was n
 
 - Repo (private): https://github.com/rajistics-demo/prepared-monorepo-demo. Default branch: `main`.
 - Actions: https://github.com/rajistics-demo/prepared-monorepo-demo/actions
-- Images: none published yet. Planned: `ghcr.io/rajistics-demo/prepared-monorepo-sandbox` and
-  `ghcr.io/rajistics-demo/prepared-monorepo-events-svc`, new tags only, never overwritten.
+- Images (private GHCR packages; new tags only, never overwritten). Use the digests listed under "M3 outputs":
+  - `ghcr.io/rajistics-demo/prepared-monorepo-sandbox`
+  - `ghcr.io/rajistics-demo/prepared-monorepo-events-svc`
+- Workflows:
+  - `image.yml` (dispatch, `publish=true`) builds and publishes the images.
+  - `validate.yml` (dispatch, `image=<digest>`) runs the in-image checks.
+  - `ci.yml` runs on push.
 
 ## Builder path (off-laptop)
 
@@ -151,25 +199,33 @@ anything consumed it, and the reference branch was rebased onto it. `main` was n
 
 ## Next steps
 
-1. Finish M3: get one green `image.yml` run, then record the digest, compressed and unpacked sizes, and peak
-   runner disk from its `image-report` artifact.
-2. M4: dispatch `validate.yml` with `image=<that digest>`. On a GitHub runner, `--privileged` plus a
-   per-container `/var/lib/docker` volume stands in for Sysbox. It checks:
-   - entrypoint health
-   - `sudo` and `dockerd`
-   - two concurrent prepared tasks plus the marker-write isolation probe
-   - induced failure at `services_db`, leaving no containers or volumes
-   - `oh-cleanup` leaving nothing behind
-   - `oh-verify --mode prepared` PASS plus the negative control
-   - TTFMT benchmark: unprepared cold vs prepared cold, each in a fresh sandbox, same runner and base SHA, n=1
+1. **M5, docs only (in progress next).** Write `env/rajistics/` as **proposed, not applied** registration
+   material for Codex and Raj to review:
+   - the sandbox-spec / warm-pool entry for the current digest
+   - sizing: about 4 GB of inner-Docker disk on top of the 6.24 GB image, with 2 vCPU / 8 GB as the floor
+     measured here
+   - the image-pull secret requirement for a private GHCR package
+   - the manual-trigger launcher contract
+   - the evidence each step must produce
+
+   Nothing is registered or pulled on Rajistics until Raj approves.
+2. **Optional benchmark fidelity:** repeat the bench n≥3 per mode, and try pre-seeding inner Docker images to
+   remove the 27.5 s `docker load`. Report it separately from the n=1 headline.
+3. **Before any live agent demo:** move or delete `reference/fix-recently-paid` (see Deviations).
 
 ## Blockers / open risks
 
-- None blocking right now.
-- Transient: one CI run (38305390512) failed when every `static.crates.io` download timed out inside the
+- **Nothing blocks M5.** Rajistics registration and the live agent run are gated on Raj's approval, and are not
+  blocked technically as far as is known.
+- **Resolved:** GitHub-hosted runner disk was enough. Peak build increase was 12.6 GB; validation ran on the
+  same runner class.
+- **Resolved:** nested `dockerd` works on GitHub-hosted runners with `--privileged`, so the EC2 fallback was not
+  needed and no AWS resources were created.
+- **Open, Rajistics-specific and untested:**
+  - whether Sysbox there gives `openhands` a working `dockerd` with this image's sudo path
+  - inner data-root placement and size limits
+  - pull time of the 2.27 GB image on its nodes
+  - whether a private GHCR package needs an image-pull secret there
+- **Transient:** one CI run (38305390512) failed when every `static.crates.io` download timed out inside the
   events-svc build. The same build passed in the concurrent and later runs. Cargo now retries with fewer
   connections.
-- Risk: GitHub-hosted runner disk for a ~10 GB image plus `docker save` tarballs plus nested-Docker
-  validation. This will be measured in M3; the EC2 fallback applies only if that measurement fails.
-- Risk: whether nested dockerd works on GitHub-hosted runners for in-image validation (needs
-  `--privileged`). If it does not, M4 moves to the EC2 builder.
