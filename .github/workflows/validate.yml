@@ -52,10 +52,12 @@ jobs:
         run: |
           docker image inspect "$IMAGE" --format '{{json .Config.Entrypoint}} {{.Config.User}}' | tee "$OUT/entrypoint.txt"
           grep -q '"tini","--","/usr/local/bin/openhands-agent-server"' "$OUT/entrypoint.txt"
-          docker run -d --name agent-entry -p 18080:8000 "$IMAGE" >/dev/null
+          # With no args the base entrypoint binds 127.0.0.1:8000 inside the container (the runtime passes its
+          # own host/port), so probe from inside rather than through a published port.
+          docker run -d --name agent-entry "$IMAGE" >/dev/null
           for i in $(seq 1 60); do
             for p in alive health; do
-              code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:18080/$p" || true)
+              code=$(docker exec agent-entry python3 -c "import urllib.request as u;print(u.urlopen('http://127.0.0.1:8000/$p',timeout=2).status)" 2>/dev/null || true)
               if [ "$code" = 200 ]; then echo "/$p 200 after ${i}s" | tee "$OUT/entrypoint-health.txt"; break 2; fi
             done; sleep 1
           done

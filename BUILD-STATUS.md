@@ -47,7 +47,28 @@ events-svc ~1 min, fixtures ~1 min.
 | [38306993980](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38306993980) | `ffaf115` | Fixtures built for all 3 DBs, then cleanup failed: root-owned files in the temp checkout | `540d8b1`: the bootstrap container hands `/src` back to the runner UID in an EXIT trap |
 | [38308202521](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38308202521) | `540d8b1` | Seed history scan clean; fixture/metadata scan reported 7 findings | `4e53325`: verbose, redacted report, plus a narrow allowlist (see below) |
 | [38309317972](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38309317972) | `4e53325` | Scans clean, prepared image built, entrypoint preserved; smoke test failed: git refused the root-owned seed as dubious ownership as `openhands` | `54706f0`: `git config --system safe.directory` for only `/opt/prepared/seed/repo.git`; smoke test now runs the real no-hardlinks clone and checks there are no alternates |
-| [38310817702](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38310817702) | `54706f0` | running | |
+| [38310817702](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38310817702) | `54706f0` | **green: every gate passed, images pushed** | |
+
+**M3 outputs (run 38310817702, artifact `image-report`):**
+
+- **Prepared image:** `ghcr.io/rajistics-demo/prepared-monorepo-sandbox@sha256:3bd77810511472c318ac3348fd60bc461d8580d98a033f1493a124164a8fe377`
+  (tag `54706f05e794-r38310817702-1`)
+- **events-svc:** `ghcr.io/rajistics-demo/prepared-monorepo-events-svc@sha256:306f36710a2a9ceacd442053fef46af294406a175f455a48dd1678f0cb440614`
+- **Sizes** (measured):
+
+  | Measure | Size |
+  |---|---|
+  | Base, unpacked | 3.24 GB |
+  | Prepared image, unpacked | 6.24 GB |
+  | Prepared image, compressed | 2.27 GB (35 layers) |
+  | Shared with base | 21 layers |
+  | Compressed bytes not in base | 1.07 GB |
+
+- **Context:** 1.43 GB of service image tarballs (3 PostgreSQL images + events-svc), 45 KB of fixtures, 95 KB seed.
+- **Runner disk:** peak increase during the build was 12.6 GB, including build cache and intermediate images.
+- **Fresh pull** on a GitHub runner took 81 s (M4 run 38312235108).
+- **Nested Docker disk cost:** the tarballs are loaded into the sandbox's inner Docker at prepare time. Inner-Docker
+  disk therefore adds roughly the unpacked size of those images on top of the image itself; M4 measures it.
 
 **Secret-scan allowlist** (`env/security/gitleaks-image-inputs.toml`, used only by the image-input scan):
 
