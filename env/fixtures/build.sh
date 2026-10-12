@@ -44,8 +44,10 @@ docker run --rm --network host --user root --entrypoint /bin/bash \
   -e AUTH_MODE=none -e BOOTSTRAP_ENVS=development,test \
   -e PG14_PORT -e PG16_PORT -e PG17_PORT -e EVENTS_SVC_PORT \
   -e BUNDLE_FROZEN=true -e BUNDLE_APP_CONFIG=/tmp/bundle-config -e BUNDLE_USER_HOME=/tmp/bundle-home \
+  -e HOST_OWNER="$(id -u):$(id -g)" \
   -v "$WORK/repo:/src" -w /src/server "$TOOLCHAIN_IMAGE" \
   -c 'set -euo pipefail
+      trap "chown -R \"\$HOST_OWNER\" /src" EXIT
       key="$(python3 /opt/prepared/bin/keys.py bundle --repo /src)"
       test -d "/opt/prepared/bundle/$key" || { echo "bundle key $key not in toolchain image" >&2; exit 1; }
       export BUNDLE_PATH="/opt/prepared/bundle/$key"
