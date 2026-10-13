@@ -280,8 +280,9 @@ anything consumed it, and the reference branch was rebased onto it. `main` was n
      are unchanged, and `v1_current` is byte-identical.
 2. **Then M5:** run `ssm-run.sh precheck`, which must exit 0, then `save <digest> 0`. Record the snapshots and SSM
    IDs.
-3. **Before M6:** Raj decides on re-privatizing the repo and deleting `reference/fix-recently-paid` (bundle
-   already saved). Otherwise the exposure is disclosed in the demo (see Blockers).
+3. **M6 reference handling (not a gate):** by default M6 runs with the reference-exposure disclosure and makes no
+   blind-solve claim. Raj may optionally choose remediation (re-private the repo and delete the branch). The
+   private bundle and evidence are kept either way.
 4. **M6:** the live demo per the acceptance list in `env/rajistics/README.md`.
 5. **Optional benchmark fidelity:** repeat the bench n≥3 per mode, and try pre-seeding inner Docker images to
    remove the ~27 s `docker load`. Report it separately from the n=1 numbers.
@@ -290,7 +291,10 @@ anything consumed it, and the reference branch was rebased onto it. `main` was n
 
 - **Resolved: pull auth.** Raj made both packages public (anonymous HEAD 200 at both pinned digests). No
   credential was created. Digests and tags were unchanged.
-- **Blocks M6 (blind solve): reference fix is publicly readable.**
+- **Not a gate; disclosure required: reference fix is publicly readable.** The acceptance criteria allow either
+  an inaccessible reference solution or explicit disclosure. Unless Raj chooses remediation, M6 proceeds with the
+  disclosure below once the admin and capacity gates pass. While the question is open, the agent does not change
+  repo visibility or delete the branch.
   - This repo became **public** at 2026-10-12T20:17:55Z (GitHub PublicEvent, actor rajshah4). It was likely
     clicked while trying to make the packages public. The agent did not change it, because repo visibility
     changes were excluded from its authorization.
@@ -304,12 +308,20 @@ anything consumed it, and the reference branch was rebased onto it. `main` was n
   - Evidence preserved privately (local, mode 600, not in git):
     `rajistics-evidence/2026-10-12/reference-fix-recently-paid.bundle`. The bundle is verified. It contains
     H `a5648107…`, and its sha256 is in the `.sha256` file alongside it.
-  - **Pending Raj decision (reversible, scoped):** (1) make the repo private again, which re-verifies
-    anonymous HEAD on both packages because package visibility is independent; **and** (2) delete the remote
+  - **Optional Raj remediation (reversible, scoped; question pending, nothing done):** (1) make the repo private again, then re-verify
+    anonymous HEAD on both packages (that package visibility stays independent is expected but not yet verified); **and** (2) delete the remote
     branch `reference/fix-recently-paid`, restorable from the bundle. After that, a sandbox token with repo read
     can no longer fetch it. GitHub may still serve the unreachable commit by SHA, and the SHA is in `main` history.
-  - If either step is declined, the demo must **disclose** that the reference fix was publicly reachable. It
-    must not be presented as a blind solve.
+  - Default (no remediation chosen): the demo carries this disclosure verbatim in the run report, the PR body and
+    the spoken intro, and makes no blind-solve claim anywhere:
+    > Reference exposure: the repository `rajistics-demo/prepared-monorepo-demo` has been public since
+    > 2026-10-12T20:17:55Z. Its branch `reference/fix-recently-paid` (fix commit `a5648107`) and the build
+    > notes on `main` were publicly readable during this run, and the agent sandbox had network and git access
+    > to them. This run demonstrates the prepared environment, red/green evidence and exact-SHA verification.
+    > It is not evidence of solving without access to a known answer.
+  - The run report also records whether the agent's transcript shows any fetch or read of `reference/*`, the fix
+    SHA or `BUILD-STATUS.md`. This is a factual observation and does not replace the disclosure.
+  - Even if Raj later remediates, the disclosure still applies to any run that started before remediation.
 - **Blocks M5: runtime-api admin disabled.**
   - Root cause: Admin Console item `admin_password` is empty. runtime-api 0.10.0 treats empty as disabled.
   - Fix prepared (`env/rajistics/admin-setting.md`); Raj must enter the password.

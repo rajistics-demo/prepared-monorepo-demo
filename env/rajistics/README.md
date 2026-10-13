@@ -159,7 +159,9 @@ Record the SSM command IDs, the before and after snapshots, and the saved config
     - If the server ignores the tool list, the browser tool's presence is disclosed and memory watched.
   - Any `oom_kill > 0` live stops the run.
 - **Agent prompt:** the bug report and expected behavior only.
-  - `reference/fix-recently-paid` is deleted or moved first. Otherwise reference exposure is disclosed.
+  - `reference/fix-recently-paid` is deleted or moved first. Otherwise reference exposure is disclosed, using the
+    verbatim text in BUILD-STATUS (Blockers), and no blind-solve claim is made. As of 2026-10-13 the default is
+    disclosure, because the repo is public.
 - **Agent work:**
   - writes the regression test
   - shows an `ASSERTION_RED` at base
