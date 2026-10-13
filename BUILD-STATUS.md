@@ -297,6 +297,9 @@ anything consumed it, and the reference branch was rebased onto it. `main` was n
 - **Raj's ~50 GB image:** not found on the node (outer containerd, nested Docker, PVs). Its location is
   **unverified**.
   - A stopped `replicated-openhands` instance and unattached 50 GB EBS volumes exist; they were not inspected.
+  - **Likely referent, unconfirmed:** the 55.48 GB Root POC image from 2026-08-15, which ran on the separate,
+    since-destroyed `rajiv-monorepo-poc` install. Today's reads found no ECR image over 20 GB and no POC
+    instance. Raj to confirm.
   - Node disk fell from 79% to 38% since the planning read, with no action by us.
   - We protect it by not deleting or pruning anything and keeping disk far below GC. `v1_current` is **not**
     assumed to be it.

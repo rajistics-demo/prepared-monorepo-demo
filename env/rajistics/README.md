@@ -69,6 +69,14 @@ Disk gate details:
     2026-10-11 or later. That is consistent with runtime-api deleting paused sandboxes and their PVCs at its
     86,400 s deletion time.
   - None of this was caused by us: every task action on Rajistics was read-only.
+  - **Likely referent, from agent memory (unconfirmed by Raj):** the 2026-08-15 Root POC custom image.
+    - ECR digest `sha256:c285ebc5…`, 53.16 GB compressed / 55.48 GB expanded.
+    - It ran on a *separate* install (`app.replicated-monorepo.rajistics.com`, host `rajiv-monorepo-poc`), not on
+      this node.
+    - Memory records that its ECR repository was removed on 2026-08-21 and the POC host later destroyed.
+    - Read-only checks on 2026-10-13 are consistent with that: no `rajiv-monorepo-poc` instance, and no ECR image
+      over 20 GB in us-west-2 or us-east-1 (us-west-2 has no repositories).
+    - If this is the image Raj means, it is not on Rajistics and this rollout cannot affect it.
   - If the image lived inside a sandbox (its PVC or nested Docker), it may have been reclaimed before this work
     started. Only Raj can say where it was.
 - **The new pull alone can't trigger GC.** A full, non-deduplicated pull (2.27 GB compressed + 6.24 GB unpacked)
