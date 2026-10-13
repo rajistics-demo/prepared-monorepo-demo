@@ -1,6 +1,6 @@
 # Build status: prepared-monorepo-demo
 
-Last updated: 2026-10-13 02:55Z, after envelope run 38337793281 and the admin-setting source and live trace (Opus 5.5 in Agent Canvas; Codex supervising).
+Last updated: 2026-10-13 13:25Z, after anonymous-pull verification, precheck-4 (SSM `2fa622c9`) and capacity refresh (SSM `3c72e022`) (Opus 5.5 in Agent Canvas; Codex supervising).
 Plan: `/Users/rajiv.shah/Code/install_replicate/demo-plans/root-monorepo/technical-plan.md`
 (+ `evidence-and-decisions.md`). This file is the single place to check progress.
 
@@ -29,11 +29,12 @@ registered, pulled or run on Rajistics.
   | Gate | Result | Next action |
   |---|---|---|
   | Digest-pinned image | ok (SSM `a189512e`) | none |
-  | Disk | ok: 38% now, 46% projected, vs 85% GC trigger and 70% cap | none |
+  | Disk | ok (precheck-4, 13:20Z): 40.2% now, 48.7% projected, vs 85% GC trigger and 70% cap. Was 37.9% on 10-12 | none |
   | Ownership (name `prepared-monorepo` is new) | ok | none |
+  | Live capacity (13:20Z) | node requests 4735m CPU (59%) / 10.3 GiB (33%); 17.9 GB memory available; no pressure conditions; 22 Running pods; runtime deploys warm 1, sessions 16 (was 10 at 10-12 23:09Z, with Running pods and requests unchanged, so the new ones are likely scaled to zero). Evidence: `rajistics-evidence/2026-10-12/capacity-refresh-2026-10-13.txt` | recheck right before `save` |
   | Resource envelope | ok in CI, [run 38337793281](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38337793281): full verify PASS at 1 CPU / 2048Mi, 0 OOM, ephemeral 3.07 GB of 10Gi. **Thin memory headroom:** 2,219 `memory.max` events | live recheck in M6 |
-  | Anonymous pull | **FAIL** (baseline HEAD 401). Raj approved making the 2 packages public | **Raj UI step:** GitHub has no visibility API, and the agent has no browser session |
-  | Runtime API admin | **FAIL**: Secret `admin-password` is empty, so admin returns 403 | **Raj enters** `admin_password` in Admin Console → Sandbox Configuration, then Deploys. This rolls 4 pods; sandboxes are untouched. See `env/rajistics/admin-setting.md` |
+  | Anonymous pull | **ok** 2026-10-13 13:17Z: anonymous token issued, manifest HEAD **200** for `prepared-monorepo-sandbox@sha256:b5626174…fd9e0` and `prepared-monorepo-events-svc@sha256:d493cf9b…cac6ba` (full digests in `rajistics-evidence/2026-10-12/anon-head-after-public.txt`). Raj made both packages public in the UI. Package metadata API not readable (token lacks `read:packages`) | none |
+  | Runtime API admin | **FAIL** (rechecked precheck-4, 2026-10-13 13:20Z): Secret `admin-password` is still empty; `GET /api/admin/challenge` returns 403 "Admin functionality is disabled". Making the packages public did not affect this | **Raj enters** `admin_password` in Admin Console → Sandbox Configuration, then Deploys. This rolls 4 pods; sandboxes are untouched. See `env/rajistics/admin-setting.md` |
 
 | Milestone | State | Evidence |
 |---|---|---|
@@ -279,18 +280,36 @@ anything consumed it, and the reference branch was rebased onto it. `main` was n
      are unchanged, and `v1_current` is byte-identical.
 2. **Then M5:** run `ssm-run.sh precheck`, which must exit 0, then `save <digest> 0`. Record the snapshots and SSM
    IDs.
-3. **Before M6:** delete or move `reference/fix-recently-paid` (see Deviations).
+3. **Before M6:** Raj decides on re-privatizing the repo and deleting `reference/fix-recently-paid` (bundle
+   already saved). Otherwise the exposure is disclosed in the demo (see Blockers).
 4. **M6:** the live demo per the acceptance list in `env/rajistics/README.md`.
 5. **Optional benchmark fidelity:** repeat the bench n≥3 per mode, and try pre-seeding inner Docker images to
    remove the ~27 s `docker load`. Report it separately from the n=1 numbers.
 
 ## Blockers / open risks
 
-- **Blocks M5: pull auth.**
-  - Raj approved making the two packages public (2026-10-13).
-  - GitHub exposes visibility only in the package settings UI. The agent's browser is logged out, and its token
-    has `repo`/`workflow` scopes only. So this is a Raj click.
-  - No credential was created.
+- **Resolved: pull auth.** Raj made both packages public (anonymous HEAD 200 at both pinned digests). No
+  credential was created. Digests and tags were unchanged.
+- **Blocks M6 (blind solve): reference fix is publicly readable.**
+  - This repo became **public** at 2026-10-12T20:17:55Z (GitHub PublicEvent, actor rajshah4). It was likely
+    clicked while trying to make the packages public. The agent did not change it, because repo visibility
+    changes were excluded from its authorization.
+  - Anonymous `GET /repos/.../branches/reference/fix-recently-paid` returns 200. `main` also publishes the fix
+    SHA in this file and both validation workflows. The base tag's `BUILD-STATUS.md` points to `reference/*`.
+  - Leak paths for the demo agent: (a) web/API access to the public repo; (b) `cold` mode does a full
+    `git clone` (all branches); (c) `origin` is set to the repo URL, so `git fetch origin` reaches every branch.
+    `prepared` mode clones from the seed (no reference refs) and fetches only the target SHA. That limits what
+    is checked out but does not block (a) or (c).
+  - No secrets exposed: a pattern scan across all refs found nothing. The content is synthetic.
+  - Evidence preserved privately (local, mode 600, not in git):
+    `rajistics-evidence/2026-10-12/reference-fix-recently-paid.bundle`. The bundle is verified. It contains
+    H `a5648107…`, and its sha256 is in the `.sha256` file alongside it.
+  - **Pending Raj decision (reversible, scoped):** (1) make the repo private again, which re-verifies
+    anonymous HEAD on both packages because package visibility is independent; **and** (2) delete the remote
+    branch `reference/fix-recently-paid`, restorable from the bundle. After that, a sandbox token with repo read
+    can no longer fetch it. GitHub may still serve the unreachable commit by SHA, and the SHA is in `main` history.
+  - If either step is declined, the demo must **disclose** that the reference fix was publicly reachable. It
+    must not be presented as a blind solve.
 - **Blocks M5: runtime-api admin disabled.**
   - Root cause: Admin Console item `admin_password` is empty. runtime-api 0.10.0 treats empty as disabled.
   - Fix prepared (`env/rajistics/admin-setting.md`); Raj must enter the password.
