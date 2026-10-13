@@ -1,0 +1,112 @@
+# Rajistics sandbox-envelope gate (pre-M6): the full prepared verify path under the live global sandbox limits
+# (CPU 1000m, memory 2048Mi, no swap) with the real entrypoint (agent-server running), measuring OOM events and
+# writable-layer + inner-Docker bytes against the 10Gi ephemeral limit. Runner --privileged stands in for Sysbox.
+name: envelope
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: Prepared image by digest (ghcr.io/...@sha256:...)
+        required: true
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  envelope:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      IMAGE: ${{ inputs.image }}
+      OUT: ${{ github.workspace }}/envelope
+      TEST_REL: server/test/queries/recently_paid_accounts_regression_test.rb
+      EPHEMERAL_LIMIT_BYTES: "10737418240"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve SHAs
+        id: shas
+        run: |
+          [[ "$IMAGE" =~ ^ghcr\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$ ]] || { echo "image must be pinned by digest" >&2; exit 1; }
+          base=$(git rev-parse 'demo/base-v1^{commit}')
+          head=$(git rev-parse origin/reference/fix-recently-paid); test_sha=$(git rev-parse "$head~1")
+          { echo "base=$base"; echo "test=$test_sha"; echo "head=$head"; } | tee -a "$GITHUB_OUTPUT"
+          mkdir -p "$OUT"; nproc > "$OUT/runner-nproc.txt"; free -b > "$OUT/runner-mem.txt"
+
+      - name: Pull image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker pull --quiet "$IMAGE"; docker logout ghcr.io
+
+      - name: Start sandbox at the Rajistics envelope with the real entrypoint
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          docker run -d --privileged --name env-sbx --cpus 1 --memory 2048m --memory-swap 2048m \
+            -v env-sbx-docker:/var/lib/docker -e GITHUB_TOKEN -e AUTH_MODE=none -e OH_IMAGE_REF="$IMAGE" "$IMAGE" >/dev/null
+          for i in $(seq 1 90); do
+            code=$(docker exec env-sbx python3 -c "import urllib.request as u;print(u.urlopen('http://127.0.0.1:8000/alive',timeout=2).status)" 2>/dev/null || true)
+            [ "$code" = 200 ] && { echo "agent-server /alive 200 after ${i}s" | tee "$OUT/agent-alive-start.txt"; break; }; sleep 1
+          done
+          test -s "$OUT/agent-alive-start.txt"
+
+      - name: Full prepared verify (RED at base, full suite GREEN at head) under the envelope
+        run: |
+          s=${{ steps.shas.outputs.base }} t=${{ steps.shas.outputs.test }} h=${{ steps.shas.outputs.head }}
+          start=$(date +%s)
+          docker exec env-sbx oh-verify --mode prepared --task-root /tmp/oh-verify --keep-tasks --base "$s" --test-sha "$t" \
+            --head "$h" --tests "$TEST_REL" --out /tmp/verify-envelope.json
+          echo "verify_seconds $(( $(date +%s) - start ))" | tee "$OUT/verify-seconds.txt"
+          docker cp env-sbx:/tmp/verify-envelope.json "$OUT/"
+          grep -q '"verdict": "PASS"' "$OUT/verify-envelope.json"
+
+      - name: Measure memory, OOM, liveness and ephemeral bytes (tasks still present)
+        run: |
+          docker exec env-sbx sh -c 'echo "memory_peak_bytes $(cat /sys/fs/cgroup/memory.peak)"; cat /sys/fs/cgroup/memory.events; grep usage_usec /sys/fs/cgroup/cpu.stat' \
+            | tee "$OUT/cgroup.txt"
+          docker inspect env-sbx --format 'oom_killed={{.State.OOMKilled}} running={{.State.Running}} restarts={{.RestartCount}}' | tee -a "$OUT/cgroup.txt"
+          code=$(docker exec env-sbx python3 -c "import urllib.request as u;print(u.urlopen('http://127.0.0.1:8000/alive',timeout=5).status)" 2>/dev/null || true)
+          echo "agent_alive_after $code" | tee -a "$OUT/cgroup.txt"
+          rw=$(docker inspect --size env-sbx --format '{{.SizeRw}}')
+          inner=$(docker exec -u 0 env-sbx du -sxB1 /var/lib/docker | cut -f1)
+          python3 - "$rw" "$inner" "$OUT" <<'EOF'
+          import json, os, re, sys
+          rw, inner, out = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
+          cg = open(f"{out}/cgroup.txt").read()
+          num = lambda k: int(re.search(rf"^{k} (\d+)", cg, re.M).group(1))
+          limit = int(os.environ["EPHEMERAL_LIMIT_BYTES"])
+          r = {"limits": {"cpus": 1, "memory_bytes": 2048 * 2**20, "swap": 0, "ephemeral_limit_bytes": limit},
+               "memory_peak_bytes": num("memory_peak_bytes"), "oom": num("oom"), "oom_kill": num("oom_kill"),
+               "memory_max_events": num("max"), "cpu_usage_usec": num("usage_usec"),
+               "oom_killed_container": "oom_killed=true" in cg, "agent_alive_after": "agent_alive_after 200" in cg,
+               "writable_layer_bytes": rw, "inner_docker_bytes": inner, "ephemeral_upper_bound_bytes": rw + inner}
+          r["ephemeral_fraction_of_limit"] = round(r["ephemeral_upper_bound_bytes"] / limit, 3)
+          r["pass"] = (r["oom_kill"] == 0 and not r["oom_killed_container"] and r["agent_alive_after"]
+                       and r["ephemeral_upper_bound_bytes"] < limit)
+          json.dump(r, open(f"{out}/envelope.json", "w"), indent=2); print(json.dumps(r, indent=2))
+          sys.exit(0 if r["pass"] else 1)
+          EOF
+
+      - name: Collect task state on failure
+        if: failure()
+        run: |
+          docker exec -u 0 env-sbx sh -c 'cd /tmp && tar -czf /tmp/task-state.tgz --ignore-failed-read $(ls -d oh-*/*/state oh-*/*/evidence 2>/dev/null) 2>/dev/null; true' || true
+          docker cp env-sbx:/tmp/task-state.tgz "$OUT/task-state.tgz" 2>/dev/null || true
+          docker logs env-sbx > "$OUT/agent-server.log" 2>&1 || true
+
+      - name: Teardown
+        if: always()
+        run: docker rm -f env-sbx >/dev/null 2>&1 || true; docker volume rm env-sbx-docker >/dev/null 2>&1 || true
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: envelope-${{ github.run_id }}
+          path: envelope/
+          retention-days: 30

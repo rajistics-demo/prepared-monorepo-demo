@@ -1,18 +1,38 @@
 # Build status: prepared-monorepo-demo
 
-Last updated: 2026-10-12, after M4 run 38316367328 (Opus 5.5 in Agent Canvas; Codex supervising).
+Last updated: 2026-10-12 23:30Z, after Rajistics precheck SSM `a189512e` (Opus 5.5 in Agent Canvas; Codex supervising).
 Plan: `/Users/rajiv.shah/Code/install_replicate/demo-plans/root-monorepo/technical-plan.md`
 (+ `evidence-and-decisions.md`). This file is the single place to check progress.
 
 ## Current milestone
 
-**M3 and M4 done on GitHub-hosted runners. Next is M5: the proposed Rajistics registration config for Codex
-review. Nothing has been registered or pulled on Rajistics.**
+**Rollout scope:** Raj has authorized registering the new image on Rajistics and running the demo end to end,
+on condition that his existing image and workloads are left alone.
+
+**State:** M3, M4 and the sizing run are done on GitHub-hosted runners. M5, the additive registration, is
+**blocked at two precheck gates**. Each needs a Raj-owned settings change (see "Blockers"). Nothing has been
+registered, pulled or run on Rajistics.
 
 - **Current image:** `ghcr.io/rajistics-demo/prepared-monorepo-sandbox@sha256:b56261749a2f17542e45182f6006d1909f0e8fd03b46c919b2a58bc60a4fd9e0`.
-- **Benchmark headline** (run 38316367328, n=1): TTFMT 136.3 s unprepared-cold vs 47.3 s prepared-cold (2.9x).
-- **Benchmark scope:** synthetic repo, 2 vCPU GitHub runner, `--privileged` nested Docker. This is not a Rajistics
-  or Root number.
+- **Image size:** 6.24 GB unpacked and 2.27 GB compressed, within the 10 GB limit. New to a node that already
+  caches the 1.50.1 base: 1.07 GB compressed, about 3.0 GB unpacked.
+- **Benchmark** (GitHub runner, n=1 per run):
+  - TTFMT 136.3 s cold vs 47.3 s prepared (run 38316367328)
+  - TTFMT 114.9 s cold vs 39.7 s prepared (run 38317624879)
+- **What the benchmark covers:** setup-path evidence only.
+  - Both modes used the same prepared outer image and toolchain.
+  - The cold mode rebuilt the task's dependencies (bundle, the events-svc build, service pulls, databases).
+  - It did **not** include installing Ruby or base tooling, or transferring the outer image.
+  - It is not a full stock-image cold start, and not a Rajistics or Root speedup.
+- **Rajistics gates** (SSM `a189512e`):
+
+  | Gate | Result |
+  |---|---|
+  | Digest-pinned image | ok |
+  | Disk | ok |
+  | Ownership (name `prepared-monorepo` is new) | ok |
+  | Anonymous pull | **FAIL** |
+  | Runtime API admin access | **FAIL** |
 
 | Milestone | State | Evidence |
 |---|---|---|
@@ -21,7 +41,9 @@ review. Nothing has been registered or pulled on Rajistics.**
 | M2 CI: secret scan, server suite on PG 14/16/17, cargo test, red/green verifier + negative control | **done** | [run 38305813482](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38305813482) (`main`), [run 38305818289](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38305818289) (`reference/fix-recently-paid`), artifact `verifier-evidence` |
 | M3 Fixtures, toolchain + prepared images, size report | **done** | [run 38314542594](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38314542594), artifact `image-report`; see "M3 run log" |
 | M4 In-image validation (nested dockerd, prepared mode, isolation probe, induced-failure rollback, cold vs prepared timing) | **done** | [run 38316367328](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38316367328), artifact `validation-38316367328`; see "M4 evidence" |
-| M5 Proposed Rajistics registration config + peak-disk evidence for Codex review | todo | none yet |
+| M4b Sizing probe (whole-sandbox cgroup peaks; prepared run under Rajistics default 1 CPU / 2048Mi) | **done** | [run 38317624879](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38317624879); see "Sizing evidence" |
+| M5 Additive Rajistics registration (`prepared-monorepo` warm config beside `v1_current`) | **blocked** (pull auth, runtime-api admin disabled) | `env/rajistics/`; local evidence `../rajistics-evidence/2026-10-12/` |
+| M6 Live E2E demo on Rajistics (agent red/fix/green, demo branch, fresh verify, Sysbox and isolation probes, cleanup) | not started (needs M5) | none |
 
 ### M2 verifier evidence (run 38305818289, `oh-verify --mode cold` on a GitHub runner)
 
@@ -102,9 +124,24 @@ pull time is excluded from TTFMT.
 | `oh-verify --mode prepared` (B=`5263a4b`, T=`b8b1229`, H=`a564810`) | **PASS** in 34 s. RED and GREEN each ran as a new task with fixtures `restored`, a `seed` checkout and a new Compose project |
 | Negative control (H=T) | **FAIL / BEHAVIOR** |
 
-**Benchmark: time to first meaningful test (TTFMT).** The clock starts before `prepare-workspace` and stops when the
-regression test is classified `ASSERTION_RED` at base. Both modes ran on the same runner, at the same base SHA,
-with the same test file, each in a fresh sandbox with an empty inner Docker. n=1 per mode.
+**Isolation scope.** The checks above demonstrate isolation *within one sandbox*: two tasks sharing one inner
+daemon get separate Compose projects, databases, volumes, ports and checkouts. They do **not** demonstrate security
+isolation *between sandboxes* on Rajistics, which depends on Sysbox, pod and namespace boundaries and on which
+credentials each sandbox carries. That remains pending until M6.
+
+**Benchmark: time to first meaningful test (TTFMT).**
+
+- **Clock:** starts before `prepare-workspace`; stops when the regression test is classified `ASSERTION_RED` at
+  base.
+- **Controls:** both modes ran on the same runner, at the same base SHA, with the same test file, each in a fresh
+  sandbox with an empty inner Docker. n=1 per mode.
+- **Same outer image in both modes.** "Unprepared cold" ran inside the same prepared outer image and toolchain as
+  "prepared":
+  - Ruby, Bundler, the Docker engine and the agent-server were already present in both.
+  - Cold rebuilt the task-level work: network checkout, `bundle install`, PostgreSQL pulls, the events-svc Rust
+    build, `dev:bootstrap`.
+  - Outer image transfer is excluded from both (pull 76-119 s on the runner).
+- **So:** this is setup-path evidence, not a stock-image cold start and not a Rajistics measurement.
 
 | Phase (s) | checkout | bundle | dockerd | images | services_db | fixtures | services_events | bootstrap | verify_ready | first test | **TTFMT** |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -122,6 +159,34 @@ What the benchmark shows and does not show:
   described as slow, so the absolute cold numbers here are not predictive for Root.
 - **Inner-Docker disk:** 4.06 GB in the prepared bench sandbox and 4.67 GB in the cold one, in addition to the
   6.24 GB unpacked image.
+
+### Sizing evidence (`validate.yml` run 38317624879, same image, n=1)
+
+Each mode ran in a fresh `--privileged` sandbox. Memory and CPU come from the sandbox's whole cgroup: agent image,
+inner `dockerd` and all task containers. The agent-server process was not running in these bench containers
+(`--entrypoint sleep`), so a live sandbox adds the agent-server and the agent's tool processes on top.
+
+| Run | TTFMT | `memory.peak` | OOM kills | CPU time | Inner Docker |
+|---|---|---|---|---|---|
+| unprepared cold (no limits) | 114.9 s | 3.93 GB | 0 | 136.5 s | 4.67 GB |
+| prepared (no limits) | 39.7 s | 3.15 GB | 0 | 17.9 s | 4.06 GB |
+| prepared, `--cpus 1 --memory 2048m --memory-swap 2048m` | 40.8 s, `READY`, valid | 2.147 GB (= limit) | 0 | 17.8 s | 4.06 GB |
+
+- **1 CPU is not the bottleneck for the prepared path.** It took 40.8 s versus 39.7 s unconstrained; the
+  remaining time is I/O-bound (`docker load` 26.8 s).
+- **2 GiB passed, but with no headroom shown.** `memory.peak` hit the limit and the kernel reclaimed page cache;
+  nothing was OOM-killed. That doesn't show 2 GiB is enough once the agent-server, the agent's tools and a full
+  suite run are added.
+  - Rajistics sandbox limits are global: CPU 1000m, memory 2048Mi, ephemeral storage 10Gi.
+    - Those values come from local history (worklogs 2026-06-25 and 2026-07-20). The 2026-10-12 live read
+      confirmed only the variable names, which is allowlist policy.
+    - The warm-config schema has no per-config resource fields.
+  - So M6 must watch `memory.events` in the live sandbox, and treat any OOM as a sizing blocker that needs Raj's
+    decision. Global limits are not to be changed silently.
+- **Ephemeral 10Gi is the tighter disk risk.**
+  - Inner Docker alone was 4.06 GB, before the agent's checkout and caches.
+  - It is unverified whether Sysbox's inner `/var/lib/docker` counts against the pod's ephemeral-storage limit.
+  - M6 must measure it, and an eviction is a stop condition.
 
 ### History note
 
@@ -163,7 +228,9 @@ anything consumed it, and the reference branch was rebased onto it. `main` was n
   and no build, compile or service stack of this task is running locally. (Checked 2026-10-12: no
   docker socket, and no cargo, rustc, bundle or docker build processes.) `Cargo.lock` was generated
   locally with `cargo generate-lockfile` (resolution only, no compile).
-- Rajistics: not used for building. No changes made there, and Raj's existing ~50 GB image is untouched.
+- Rajistics: not used for building. Only read-only SSM inspection has run there: capacity, pull-secret names,
+  a warm-config snapshot and prechecks. Nothing was written, pulled, pruned or restarted. `v1_current` and its
+  image are untouched.
 
 ## Pinned inputs (verified against registries 2026-10-12)
 
@@ -195,28 +262,32 @@ anything consumed it, and the reference branch was rebased onto it. `main` was n
 - No secrets in git, the seed, image layers or artifacts. A secret scan gates any publication.
 - Credential isolation inside sandboxes is unproven. Ambient default-spec AWS keys and inherited creator
   tokens cannot be removed by a profile allowlist.
-- No Rajistics pulls or registration, no automation deployment, and no messages to humans.
+- **Raj-authorized scope (2026-10-12):**
+  - Register the new digest additively and run the demo end to end.
+  - Don't change `v1_current`, its image, global defaults, existing automations, Git Sync or workloads.
+  - No pruning, no direct LiteLLM access, no messages to humans.
 
 ## Next steps
 
-1. **M5, docs only (in progress next).** Write `env/rajistics/` as **proposed, not applied** registration
-   material for Codex and Raj to review:
-   - the sandbox-spec / warm-pool entry for the current digest
-   - sizing: about 4 GB of inner-Docker disk on top of the 6.24 GB image, with 2 vCPU / 8 GB as the floor
-     measured here
-   - the image-pull secret requirement for a private GHCR package
-   - the manual-trigger launcher contract
-   - the evidence each step must produce
-
-   Nothing is registered or pulled on Rajistics until Raj approves.
-2. **Optional benchmark fidelity:** repeat the bench n≥3 per mode, and try pre-seeding inner Docker images to
-   remove the 27.5 s `docker load`. Report it separately from the n=1 headline.
-3. **Before any live agent demo:** move or delete `reference/fix-recently-paid` (see Deviations).
+1. **Raj decides the two remedies** in `env/rajistics/README.md`:
+   - pull auth: GHCR public, the Replicated proxy, or a scoped pull secret
+   - enabling the runtime-api warm-config admin API through the Admin Console
+2. **Then M5:** run `ssm-run.sh precheck`, which must exit 0, then `save <digest> 0`. Record the snapshots and SSM
+   IDs.
+3. **Before M6:** delete or move `reference/fix-recently-paid` (see Deviations).
+4. **M6:** the live demo per the acceptance list in `env/rajistics/README.md`.
+5. **Optional benchmark fidelity:** repeat the bench n≥3 per mode, and try pre-seeding inner Docker images to
+   remove the ~27 s `docker load`. Report it separately from the n=1 numbers.
 
 ## Blockers / open risks
 
-- **Nothing blocks M5.** Rajistics registration and the live agent run are gated on Raj's approval, and are not
-  blocked technically as far as is known.
+- **Blocks M5: pull auth.** The GHCR packages are private, and Rajistics pulls only through the Replicated proxy
+  secret `openhands-registry`. No credential was created and visibility was not changed.
+- **Blocks M5: runtime-api admin disabled.** The `admin-password` secret is empty and `/api/admin/challenge`
+  returns 403, so the supported warm-config CLI cannot save. Not worked around.
+- **M6 risks, not yet measured live:**
+  - 2048Mi memory peaked at the limit in CI, with no OOM.
+  - The 10Gi ephemeral limit versus 4+ GB of inner Docker.
 - **Resolved:** GitHub-hosted runner disk was enough. Peak build increase was 12.6 GB; validation ran on the
   same runner class.
 - **Resolved:** nested `dockerd` works on GitHub-hosted runners with `--privileged`, so the EC2 fallback was not
@@ -225,7 +296,8 @@ anything consumed it, and the reference branch was rebased onto it. `main` was n
   - whether Sysbox there gives `openhands` a working `dockerd` with this image's sudo path
   - inner data-root placement and size limits
   - pull time of the 2.27 GB image on its nodes
-  - whether a private GHCR package needs an image-pull secret there
+  - isolation between sandboxes and which credentials each sandbox carries
+  - image GC behavior under the new image. Disk now projects to 46% against the 85% GC trigger.
 - **Transient:** one CI run (38305390512) failed when every `static.crates.io` download timed out inside the
   events-svc build. The same build passed in the concurrent and later runs. Cargo now retries with fewer
   connections.
