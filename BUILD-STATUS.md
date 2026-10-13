@@ -1,6 +1,6 @@
 # Build status: prepared-monorepo-demo
 
-Last updated: 2026-10-12 23:30Z, after Rajistics precheck SSM `a189512e` (Opus 5.5 in Agent Canvas; Codex supervising).
+Last updated: 2026-10-13 02:55Z, after envelope run 38337793281 and the admin-setting source and live trace (Opus 5.5 in Agent Canvas; Codex supervising).
 Plan: `/Users/rajiv.shah/Code/install_replicate/demo-plans/root-monorepo/technical-plan.md`
 (+ `evidence-and-decisions.md`). This file is the single place to check progress.
 
@@ -24,15 +24,16 @@ registered, pulled or run on Rajistics.
   - The cold mode rebuilt the task's dependencies (bundle, the events-svc build, service pulls, databases).
   - It did **not** include installing Ruby or base tooling, or transferring the outer image.
   - It is not a full stock-image cold start, and not a Rajistics or Root speedup.
-- **Rajistics gates** (SSM `a189512e`):
+- **Rajistics gates** (as of 2026-10-13 02:50Z):
 
-  | Gate | Result |
-  |---|---|
-  | Digest-pinned image | ok |
-  | Disk | ok |
-  | Ownership (name `prepared-monorepo` is new) | ok |
-  | Anonymous pull | **FAIL** |
-  | Runtime API admin access | **FAIL** |
+  | Gate | Result | Next action |
+  |---|---|---|
+  | Digest-pinned image | ok (SSM `a189512e`) | none |
+  | Disk | ok: 38% now, 46% projected, vs 85% GC trigger and 70% cap | none |
+  | Ownership (name `prepared-monorepo` is new) | ok | none |
+  | Resource envelope | ok in CI, [run 38337793281](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38337793281): full verify PASS at 1 CPU / 2048Mi, 0 OOM, ephemeral 3.07 GB of 10Gi. **Thin memory headroom:** 2,219 `memory.max` events | live recheck in M6 |
+  | Anonymous pull | **FAIL** (baseline HEAD 401). Raj approved making the 2 packages public | **Raj UI step:** GitHub has no visibility API, and the agent has no browser session |
+  | Runtime API admin | **FAIL**: Secret `admin-password` is empty, so admin returns 403 | **Raj enters** `admin_password` in Admin Console → Sandbox Configuration, then Deploys. This rolls 4 pods; sandboxes are untouched. See `env/rajistics/admin-setting.md` |
 
 | Milestone | State | Evidence |
 |---|---|---|
@@ -42,6 +43,7 @@ registered, pulled or run on Rajistics.
 | M3 Fixtures, toolchain + prepared images, size report | **done** | [run 38314542594](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38314542594), artifact `image-report`; see "M3 run log" |
 | M4 In-image validation (nested dockerd, prepared mode, isolation probe, induced-failure rollback, cold vs prepared timing) | **done** | [run 38316367328](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38316367328), artifact `validation-38316367328`; see "M4 evidence" |
 | M4b Sizing probe (whole-sandbox cgroup peaks; prepared run under Rajistics default 1 CPU / 2048Mi) | **done** | [run 38317624879](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38317624879); see "Sizing evidence" |
+| M4c Rajistics-envelope gate (agent-server live, full `oh-verify --mode prepared` at 1 CPU / 2048Mi / no swap, ephemeral bytes) | **done, PASS** | [run 38337793281](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38337793281), workflow `envelope.yml` |
 | M5 Additive Rajistics registration (`prepared-monorepo` warm config beside `v1_current`) | **blocked** (pull auth, runtime-api admin disabled) | `env/rajistics/`; local evidence `../rajistics-evidence/2026-10-12/` |
 | M6 Live E2E demo on Rajistics (agent red/fix/green, demo branch, fresh verify, Sysbox and isolation probes, cleanup) | not started (needs M5) | none |
 
@@ -269,9 +271,12 @@ anything consumed it, and the reference branch was rebased onto it. `main` was n
 
 ## Next steps
 
-1. **Raj decides the two remedies** in `env/rajistics/README.md`:
-   - pull auth: GHCR public, the Replicated proxy, or a scoped pull secret
-   - enabling the runtime-api warm-config admin API through the Admin Console
+1. **Raj's two browser steps.** Both are decided; neither has an agent-usable API path.
+   - **Make the GHCR packages public:** use the settings links in `env/rajistics/README.md`. Then the agent
+     verifies anonymous HEAD returns 200 for both pinned digests.
+   - **Set Runtime API Admin Password and Deploy:** follow `env/rajistics/admin-setting.md`. Deploy when no
+     automation run is in flight. Afterwards the agent checks that the 4 expected pods rolled, the sandbox pods
+     are unchanged, and `v1_current` is byte-identical.
 2. **Then M5:** run `ssm-run.sh precheck`, which must exit 0, then `save <digest> 0`. Record the snapshots and SSM
    IDs.
 3. **Before M6:** delete or move `reference/fix-recently-paid` (see Deviations).
@@ -281,13 +286,24 @@ anything consumed it, and the reference branch was rebased onto it. `main` was n
 
 ## Blockers / open risks
 
-- **Blocks M5: pull auth.** The GHCR packages are private, and Rajistics pulls only through the Replicated proxy
-  secret `openhands-registry`. No credential was created and visibility was not changed.
-- **Blocks M5: runtime-api admin disabled.** The `admin-password` secret is empty and `/api/admin/challenge`
-  returns 403, so the supported warm-config CLI cannot save. Not worked around.
-- **M6 risks, not yet measured live:**
-  - 2048Mi memory peaked at the limit in CI, with no OOM.
-  - The 10Gi ephemeral limit versus 4+ GB of inner Docker.
+- **Blocks M5: pull auth.**
+  - Raj approved making the two packages public (2026-10-13).
+  - GitHub exposes visibility only in the package settings UI. The agent's browser is logged out, and its token
+    has `repo`/`workflow` scopes only. So this is a Raj click.
+  - No credential was created.
+- **Blocks M5: runtime-api admin disabled.**
+  - Root cause: Admin Console item `admin_password` is empty. runtime-api 0.10.0 treats empty as disabled.
+  - Fix prepared (`env/rajistics/admin-setting.md`); Raj must enter the password.
+- **Raj's ~50 GB image:** not found on the node (outer containerd, nested Docker, PVs). Its location is
+  **unverified**.
+  - A stopped `replicated-openhands` instance and unattached 50 GB EBS volumes exist; they were not inspected.
+  - Node disk fell from 79% to 38% since the planning read, with no action by us.
+  - We protect it by not deleting or pruning anything and keeping disk far below GC. `v1_current` is **not**
+    assumed to be it.
+- **M6 risks, still to measure live:**
+  - Memory headroom at 2048Mi is thin (CI: 2,219 `memory.max` events, 0 OOM). Plan: demo agent without the
+    browser tool if the start API allows it; stop on any OOM.
+  - Ephemeral: 3.07 GB of 10Gi in CI; whether Sysbox's inner `/var/lib/docker` counts toward it is unverified.
 - **Resolved:** GitHub-hosted runner disk was enough. Peak build increase was 12.6 GB; validation ran on the
   same runner class.
 - **Resolved:** nested `dockerd` works on GitHub-hosted runners with `--privileged`, so the EC2 fallback was not
