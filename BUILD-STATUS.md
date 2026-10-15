@@ -1,6 +1,6 @@
 # Build status: prepared-monorepo-demo
 
-Last updated: 2026-10-15 17:00Z: admin gate passes; M5 registered additively; M6 live probes passed; LLM run held on a credential-scope decision (Opus 5.5 in Agent Canvas; Codex supervising).
+Last updated: 2026-10-15 17:45Z: M6 demo1 complete. Agent red/fix/green in a sanitized sandbox; launcher-published draft PR #1 at the agent's exact SHA; fresh `oh-verify` PASS; cross-sandbox probe; task-only cleanup; baseline unchanged (Opus 5.5 in Agent Canvas; Codex supervising).
 Plan: `/Users/rajiv.shah/Code/install_replicate/demo-plans/root-monorepo/technical-plan.md`
 (+ `evidence-and-decisions.md`). This file is the single place to check progress.
 
@@ -9,9 +9,10 @@ Plan: `/Users/rajiv.shah/Code/install_replicate/demo-plans/root-monorepo/technic
 **Rollout scope:** Raj has authorized registering the new image on Rajistics and running the demo end to end,
 on condition that his existing image and workloads are left alone.
 
-**State:** M3, M4 and the sizing run are done on GitHub-hosted runners. M5, the additive registration, is
-**blocked at two precheck gates**. Each needs a Raj-owned settings change (see "Blockers"). Nothing has been
-registered, pulled or run on Rajistics.
+**State:** M0-M5 done. M6 demo1 ran end to end on Rajistics on 2026-10-15 (see "M6 demo1 run"): draft
+[PR #1](https://github.com/rajistics-demo/prepared-monorepo-demo/pull/1) at `173e2a0` awaits human review.
+Publication was launcher-assisted (the sandbox token got 403). Synthetic repo, `AUTH_MODE=none`; Root's AWS SSO
+is not solved or exercised.
 
 - **Current image:** `ghcr.io/rajistics-demo/prepared-monorepo-sandbox@sha256:b56261749a2f17542e45182f6006d1909f0e8fd03b46c919b2a58bc60a4fd9e0`.
 - **Image size:** 6.24 GB unpacked and 2.27 GB compressed, within the 10 GB limit. New to a node that already
@@ -46,7 +47,7 @@ registered, pulled or run on Rajistics.
 | M4b Sizing probe (whole-sandbox cgroup peaks; prepared run under Rajistics default 1 CPU / 2048Mi) | **done** | [run 38317624879](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38317624879); see "Sizing evidence" |
 | M4c Rajistics-envelope gate (agent-server live, full `oh-verify --mode prepared` at 1 CPU / 2048Mi / no swap, ephemeral bytes) | **done, PASS** | [run 38337793281](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38337793281), workflow `envelope.yml` |
 | M5 Additive Rajistics registration (`prepared-monorepo` warm config beside `v1_current`) | **done** (2026-10-15, SSM `2b2f727a`): exact digest `prepared-monorepo-sandbox@sha256:b5626174…fd9e0`, count 0 (no warm pods); `v1_current` config hash unchanged; disk 44.8% now, 53.3% projected | `rajistics-evidence/2026-10-12/save-1.txt`, `capacity-settled-2026-10-15.txt` |
-| M6 Live E2E demo on Rajistics (agent red/fix/green, demo branch, fresh verify, Sysbox and isolation probes, cleanup) | **in progress**: sandbox start, Sysbox, prepare and isolation probes **PASS**; LLM conversation **held** on credential scope (see "M6 live progress") | see "M6 live progress" |
+| M6 Live E2E demo on Rajistics (agent red/fix/green, demo branch, fresh verify, Sysbox and isolation probes, cleanup) | **done (demo1), human review pending**: agent red/fix/green; launcher-published draft PR #1 (agent push 403); fresh `oh-verify` **PASS** at `173e2a0`; FS/Docker/DB separation across sandboxes, network **not** isolated (auth enforced) | see "M6 demo1 run"; private `rajistics-evidence/2026-10-12/m6-demo1/REPORT.md` |
 
 ### M6 live progress (2026-10-15, Rajistics app 1.71.0 / chart 0.81.0 / runtime-api 0.11.1)
 
@@ -76,7 +77,7 @@ What each line is: **live** = observed on Rajistics today; **source** = read fro
   the CI envelope's 2,219). Not treated as pressure. Evidence: `mem-env-work.txt`, `iso-probe-1.txt`.
 - **Cleanup (live, task-owned only):** `oh-cleanup --task …/iso2 --remove-task-dir` (compose down 0) and the failed
   `work1` dir removed. `work1b` kept for the agent run. Evidence: `iso-cleanup-1.txt`.
-- **Credential inheritance (live + source) — reason the LLM run is held:**
+- **Credential inheritance (live + source); resolved for the demo by the sanitize step in "M6 demo1 run":**
   - The demo spec copied `v1_current`'s environment by design (warm pods are claimed by exact env match). That env
     includes **static `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_REGION_NAME`** and `LMNR_PROJECT_API_KEY`;
     all four are populated in the demo sandbox (lengths only checked). Every `v1_current` sandbox has the same values
@@ -95,9 +96,52 @@ What each line is: **live** = observed on Rajistics today; **source** = read fro
     secret overrides existing secret"). Proposed for the demo start: shadow every inherited name except the ones the run
     needs with a non-sensitive placeholder, including `Runtime_API_Admin_Password` defensively. This is masking for one
     conversation, not access control, and is disclosed as such.
-- **Not yet run (proposed, in order):** demo agent conversation in `6FaTBQrwWqG7R9Y9Xte4Al` (red at base, fix, green)
-  → publish the work commit to a demo branch → fresh sandbox `oh-verify` at the published SHA → retain evidence →
-  `oh-cleanup` of task-owned state and delete only the demo sandboxes.
+### M6 demo1 run (2026-10-15 17:04-17:45Z, live unless marked)
+
+- **Sanitize (demo-owned config only):** `warm-config.sh sanitize` (commit `4714948`) re-saved `prepared-monorepo`
+  without `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` (`AWS_SESSION_TOKEN` already absent). Hash `eb2f0cfa…` →
+  `929b6dc0…`, image and other fields unchanged; `v1_current` `fd248d14…` unchanged. Replaced sandbox
+  `6FaTBQrwWqG7R9Y9Xte4Al` deleted after evidence retention.
+- **Work sandbox:** `447afdy9zo3lJO3FeElfPh`, RUNNING in 21.6 s; no AWS credential names in any readable process
+  environment. Task `demo1` prepared at base `5263a4b`: READY 32.3 s.
+- **Conversation:** `e484fb4142ae40cb8147bed5c47d15af` (start task `5e5689a5…`), READY 10.7 s. Request `secrets`
+  shadowed 29 inherited names with a placeholder; only `GITHUB_TOKEN` kept (masking, not access control). Agent:
+  first event 17:11:11Z, `oh-phase red` 17:12:23Z (ASSERTION_RED, 2 assertion failures), green and suite (21 pass)
+  by 17:12:44Z; finished 17:19:04Z. n=1.
+- **Commits:** test `e169eb78e09d8207fdac759afa685fa5180d87c0`, fix `173e2a04510f2e531d8b4f868b140697d5568456`
+  (`.paying` added to `RecentlyPaidAccounts`). Only `server/` touched.
+- **Publication (launcher-assisted):** the sandbox `GITHUB_TOKEN` authenticates as `rajshah4` but push returned 403
+  and REST writes `Resource not accessible by integration`. **The agent did not push.** The launcher exported
+  `5263a4b..173e2a0` as a git bundle (sha256 `19178021…56af`), pushed `173e2a0` unchanged to
+  `demo/recently-paid-demo1`, and opened draft [PR #1](https://github.com/rajistics-demo/prepared-monorepo-demo/pull/1)
+  with the reference-exposure disclosure and AI note. No credential entered the sandbox.
+- **Prompt deviation:** told to stop on push failure, the agent made 35 publish/auth-related actions (masked
+  names, which held placeholders and were rejected; `GH_TOKEN=$GITHUB_TOKEN`; token-in-URL pushes; `gh auth login`;
+  Git Data API writes; read-only org member/collaborator listing). All writes failed. The launcher removed the
+  `gh` `hosts.yml` it wrote. Lesson: publish from the launcher by design, or give the run a write-scoped token.
+- **Fresh verification:** new sandbox `swqOenX4fFnxeG0Ifprcl` (AWS names absent), `oh-verify --mode prepared`
+  at base/test/head **PASS** in 50.3 s: RED at base with tests from `173e2a0` = ASSERTION_RED (2, inside the new
+  test); GREEN at `173e2a0` = 21 pass incl. both new tests; distinct checkouts, Compose projects and restored DBs
+  (0 rows before each run); test blob `3f75062a…` identical at test and head. The agent's own green/suite ran
+  with the fix uncommitted, so only the verifier binds to the published SHA. Gaps: `image.ref` null
+  (`OH_IMAGE_REF` unset; spec pins the digest); `oh-verify` teardown leaves checkout/state dirs.
+- **Reference exposure:** disclosure carried verbatim in the PR and report. Transcript shows no read of
+  `reference/*`, `a5648107` or `BUILD-STATUS.md` contents before the fix (17:12Z); only a filename in a 17:11Z
+  listing and post-fix `git log origin/main` subjects (17:16Z).
+- **Cross-sandbox probe (`work2` ↔ `verify1`, concurrent):** same-path marker writes each read back their own;
+  no foreign files, Docker volumes or containers either way; `work2`'s marker DB only in `work2`. (`oh-demo1-*` in
+  `xsbx-check-work2.txt` are `work2`'s own services: a classifier false positive.) **Network is not isolated:**
+  peer ports 60000/60001 open pod-to-pod; unauthenticated `/alive` 200, agent-server APIs 401, VS Code 403; peer
+  Compose ports are loopback-bound and closed. This is FS/Docker/DB separation plus authentication, not network
+  isolation; no NetworkPolicy observed.
+- **Resources:** both sandboxes 1 CPU / 2 GiB, `memory.peak` at the limit (page cache), `oom`/`oom_kill` 0.
+- **Cleanup (task-owned only):** `demo1` task removed (compose down 0); probe markers, marker DB and the probe's
+  anonymous volumes removed; verifier sandbox deleted. Kept: work sandbox `447afdy9…` (review conversation),
+  branch, draft PR, demo warm config (count 0).
+- **Baseline after the run:** SSM snapshot `1d363b2d…` / precheck `46d67f17…` (exit 0): `v1_current` `fd248d14…`
+  unchanged, warm pod `runtime-okeyreyogkowelqq` ready=1, disk 45.0% (projected 53.5%).
+- **Evidence (private, not in git):** `rajistics-evidence/2026-10-12/m6-demo1/` with `REPORT.md`, `MANIFEST.sha256`;
+  raw events mode 600, plus a redacted copy.
 
 ### M2 verifier evidence (run 38305818289, `oh-verify --mode cold` on a GitHub runner)
 
@@ -323,18 +367,13 @@ anything consumed it, and the reference branch was rebased onto it. `main` was n
 
 ## Next steps
 
-1. **Raj's two browser steps.** Both are decided; neither has an agent-usable API path.
-   - **Make the GHCR packages public:** use the settings links in `env/rajistics/README.md`. Then the agent
-     verifies anonymous HEAD returns 200 for both pinned digests.
-   - **Set Runtime API Admin Password and Deploy:** follow `env/rajistics/admin-setting.md`. Deploy when no
-     automation run is in flight. Afterwards the agent checks that the 4 expected pods rolled, the sandbox pods
-     are unchanged, and `v1_current` is byte-identical.
-2. **Then M5:** run `ssm-run.sh precheck`, which must exit 0, then `save <digest> 0`. Record the snapshots and SSM
-   IDs.
-3. **M6 reference handling (not a gate):** by default M6 runs with the reference-exposure disclosure and makes no
-   blind-solve claim. Raj may optionally choose remediation (re-private the repo and delete the branch). The
-   private bundle and evidence are kept either way.
-4. **M6:** the live demo per the acceptance list in `env/rajistics/README.md`.
+1. **Human review of draft PR #1** (diff, verifier JSON, conversation `e484fb41…`). Do not merge without that review.
+2. **Decide the publish path for repeat runs:** launcher-side publish (as done) or a write-scoped token for the
+   demo org; the current provider token cannot write to `rajistics-demo`.
+3. **Optional:** delete work sandbox `447afdy9zo3lJO3FeElfPh` once review no longer needs it; optional reference
+   remediation (see Blockers) for future runs.
+4. **Optional fidelity:** NetworkPolicy between sandboxes is not in place; any claim of network isolation needs it
+   tested first. Memory headroom at 2 GiB stays thin.
 5. **Optional benchmark fidelity:** repeat the bench n≥3 per mode, and try pre-seeding inner Docker images to
    remove the ~27 s `docker load`. Report it separately from the n=1 numbers.
 
@@ -385,10 +424,9 @@ anything consumed it, and the reference branch was rebased onto it. `main` was n
   - Node disk fell from 79% to 38% since the planning read, with no action by us.
   - We protect it by not deleting or pruning anything and keeping disk far below GC. `v1_current` is **not**
     assumed to be it.
-- **M6 risks, still to measure live:**
-  - Memory headroom at 2048Mi is thin (CI: 2,219 `memory.max` events, 0 OOM). Plan: demo agent without the
-    browser tool if the start API allows it; stop on any OOM.
-  - Ephemeral: 3.07 GB of 10Gi in CI; whether Sysbox's inner `/var/lib/docker` counts toward it is unverified.
+- **M6 measured (demo1):** memory reached the 2 GiB limit (page cache) with 0 OOM in both sandboxes; inner
+  `/var/lib/docker` sits on the node root filesystem, not a separate per-sandbox volume. Cross-sandbox network is
+  open (auth enforced at the app layer). The sandbox `GITHUB_TOKEN` cannot write to the demo org.
 - **Resolved:** GitHub-hosted runner disk was enough. Peak build increase was 12.6 GB; validation ran on the
   same runner class.
 - **Resolved:** nested `dockerd` works on GitHub-hosted runners with `--privileged`, so the EC2 fallback was not
@@ -397,7 +435,8 @@ anything consumed it, and the reference branch was rebased onto it. `main` was n
   - whether Sysbox there gives `openhands` a working `dockerd` with this image's sudo path
   - inner data-root placement and size limits
   - pull time of the 2.27 GB image on its nodes
-  - isolation between sandboxes and which credentials each sandbox carries
+  - isolation between sandboxes: measured in demo1 (FS/Docker/DB separated; network open, auth enforced);
+    credentials: demo sandboxes now carry no AWS keys, `v1_current` still does (baseline)
   - image GC behavior under the new image. Disk now projects to 46% against the 85% GC trigger.
 - **Transient:** one CI run (38305390512) failed when every `static.crates.io` download timed out inside the
   events-svc build. The same build passed in the concurrent and later runs. Cargo now retries with fewer
