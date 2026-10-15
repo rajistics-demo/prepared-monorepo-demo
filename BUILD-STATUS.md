@@ -1,6 +1,6 @@
 # Build status: prepared-monorepo-demo
 
-Last updated: 2026-10-15 17:45Z: M6 demo1 complete. Agent red/fix/green in a sanitized sandbox; launcher-published draft PR #1 at the agent's exact SHA; fresh `oh-verify` PASS; cross-sandbox probe; task-only cleanup; baseline unchanged (Opus 5.5 in Agent Canvas; Codex supervising).
+Last updated: 2026-10-15 21:50Z: M7 demo2 complete. The agent investigated, ran red/fix/green, pushed its own branch and opened draft PR #3 with the normal provider token; fresh `oh-verify` PASS at the published SHA in a separate sandbox; cache-key invalidation probe; task-only cleanup; baseline unchanged (Opus 5.5 in Agent Canvas; Codex supervising).
 Plan: `/Users/rajiv.shah/Code/install_replicate/demo-plans/root-monorepo/technical-plan.md`
 (+ `evidence-and-decisions.md`). This file is the single place to check progress.
 
@@ -9,10 +9,13 @@ Plan: `/Users/rajiv.shah/Code/install_replicate/demo-plans/root-monorepo/technic
 **Rollout scope:** Raj has authorized registering the new image on Rajistics and running the demo end to end,
 on condition that his existing image and workloads are left alone.
 
-**State:** M0-M5 done. M6 demo1 ran end to end on Rajistics on 2026-10-15 (see "M6 demo1 run"): draft
-[PR #1](https://github.com/rajistics-demo/prepared-monorepo-demo/pull/1) at `173e2a0` awaits human review.
-Publication was launcher-assisted (the sandbox token got 403). Synthetic repo, `AUTH_MODE=none`; Root's AWS SSO
-is not solved or exercised.
+**State:** M0-M6 done. M7 demo2 ran end to end on Rajistics on 2026-10-15 with agent-owned publication (see "M7
+demo2 run"): draft [PR #3](https://github.com/rajistics-demo/prepared-monorepo-demo/pull/3) at `0d5c346` awaits
+human review. The M6 demo1 draft [PR #1](https://github.com/rajistics-demo/prepared-monorepo-demo/pull/1) was
+launcher-published because the sandbox token got 403. After Raj added this repo to GitHub App installation
+164552425, the agent's own push and PR creation work: first the access check
+[PR #2](https://github.com/rajistics-demo/prepared-monorepo-demo/pull/2), then demo2. Synthetic repo,
+`AUTH_MODE=none`; Root's AWS SSO is not solved or exercised.
 
 - **Current image:** `ghcr.io/rajistics-demo/prepared-monorepo-sandbox@sha256:b56261749a2f17542e45182f6006d1909f0e8fd03b46c919b2a58bc60a4fd9e0`.
 - **Image size:** 6.24 GB unpacked and 2.27 GB compressed, within the 10 GB limit. New to a node that already
@@ -48,6 +51,7 @@ is not solved or exercised.
 | M4c Rajistics-envelope gate (agent-server live, full `oh-verify --mode prepared` at 1 CPU / 2048Mi / no swap, ephemeral bytes) | **done, PASS** | [run 38337793281](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38337793281), workflow `envelope.yml` |
 | M5 Additive Rajistics registration (`prepared-monorepo` warm config beside `v1_current`) | **done** (2026-10-15, SSM `2b2f727a`): exact digest `prepared-monorepo-sandbox@sha256:b5626174…fd9e0`, count 0 (no warm pods); `v1_current` config hash unchanged; disk 44.8% now, 53.3% projected | `rajistics-evidence/2026-10-12/save-1.txt`, `capacity-settled-2026-10-15.txt` |
 | M6 Live E2E demo on Rajistics (agent red/fix/green, demo branch, fresh verify, Sysbox and isolation probes, cleanup) | **done (demo1), human review pending**: agent red/fix/green; launcher-published draft PR #1 (agent push 403); fresh `oh-verify` **PASS** at `173e2a0`; FS/Docker/DB separation across sandboxes, network **not** isolated (auth enforced) | see "M6 demo1 run"; private `rajistics-evidence/2026-10-12/m6-demo1/REPORT.md` |
+| M7 demo2: agent-owned publication, fresh verify of the published SHA, invalidation probe | **done, human review pending**: agent red/fix/green, then its own push and draft PR #3 at `0d5c346` with the normal provider token; fresh `oh-verify` **PASS** in a separate sandbox; cache keys HIT for the agent commit and MISS only for the perturbed input; test SHA in the PR body corrected after the fact | see "M7 demo2 run"; private `rajistics-evidence/2026-10-12/m7-demo2/REPORT.md` |
 
 ### M6 live progress (2026-10-15, Rajistics app 1.71.0 / chart 0.81.0 / runtime-api 0.11.1)
 
@@ -96,6 +100,54 @@ What each line is: **live** = observed on Rajistics today; **source** = read fro
     secret overrides existing secret"). Proposed for the demo start: shadow every inherited name except the ones the run
     needs with a non-sensitive placeholder, including `Runtime_API_Admin_Password` defensively. This is masking for one
     conversation, not access control, and is disclosed as such.
+
+### M7 demo2 run (2026-10-15 21:24-21:50Z, live unless marked)
+
+- **Setup (live):** new task-owned sandbox `work3` `5SQJBC9VLEKMVF96xem1WX` from the registered digest, cold
+  (demo warm count 0), RUNNING in 21.2 s. `prepare-workspace` prepared mode at base `5263a4b` took 31.4 s with no
+  cache misses (`images` 17.1 s, DB services 6.4 s, fixtures 2.1 s, events-svc 3.0 s, bundle 0.5 s). Conversation
+  [`4dedd893…`](https://app.replicated.rajistics.com/conversations/4dedd89313944f31a09cb0e9ebdb9296) was READY in
+  10.7 s. 29 inherited secret names were masked; only `GITHUB_TOKEN` was kept. The shell had no AWS keys.
+- **Preflight (live):** helm rev 30, app 1.71.0, runtime-api 0.11.1. SSM snapshot unchanged from M6 (`v1_current`
+  `fd248d14…`, demo spec `929b6dc0…` count 0). All precheck gates ok, disk 43.0% (projected 51.4%), no node
+  pressure. The provider `github_token` (GitHub App user-to-server) sees this repo with `contents:write` and
+  `pull_requests:write`; the `git-receive-pack` handshake returned 200.
+- **Agent (live, 2 m 18 s, 38 actions, one attempt):** read the report and server code, wrote
+  `server/test/queries/recently_paid_excludes_never_paid_test.rb`, then ran `oh-phase red`, which gave
+  `ASSERTION_RED` 65 s after the conversation's first event. It committed the test (`94e2e44584b1…`), added
+  `.paying` to `RecentlyPaidAccounts`, and ran `green` (pass) and `suite` (20 pass). It then committed the fix
+  (`0d5c346`), pushed `demo/recently-paid-demo2` and opened draft
+  [PR #3](https://github.com/rajistics-demo/prepared-monorepo-demo/pull/3) itself, with no PAT, no launcher
+  publication and no retry.
+- **SHA misreport (live):** the agent's PR body and final message gave the test commit as `94e2e44a5a2d…`, which does
+  not exist. It had only seen the short SHA `94e2e44` and made up the rest. The original body is preserved, and only
+  that SHA was corrected through `PATCH /pulls/3`; the head is unchanged and nothing was re-pushed. **Follow-up:**
+  require `git rev-parse` SHAs in the protocol and have the verifier check SHAs quoted in PR bodies.
+- **Fresh verify (live):** separate new sandbox `verify2`, new seed checkout plus an anonymous fetch of the published
+  head, new Compose projects and restored DBs. `oh-verify` **PASS** in 48.7 s:
+  - red at base plus the test overlay: `ASSERTION_RED` (`Minitest::Assertion` on Comped Corp, exit 1)
+  - green at `0d5c346`: 20 runs, 33 assertions, 0 failures
+  - static: only the query file and the new test changed; no pre-existing test modified
+  - test blob `852f71d8…` identical at the test commit and the head
+- **Isolation re-check (live):** both pods run `sysbox-runc`, each with its own user-namespace range. Concurrent
+  marker writes stayed separate across the filesystem, Docker and DBs (the M6 classifier false positive is fixed).
+  Network is still **not** isolated: peer pod ports 60000/60001 are open, `/alive` returns 200, and authenticated
+  routes return 401 (API) and 403 (VS Code). Both sandboxes had 1 CPU / 2 GiB, `memory.peak` at the limit, and 0 OOM.
+- **Invalidation (live decision, no rebuild):** on a disposable seed clone, the agent head HITs all four caches.
+  Each perturbed input MISSes only its own cache: `Gemfile.lock` and `BUNDLE_WITHOUT` invalidate the bundle; a
+  primary migration invalidates PG16; `ledger_schema.rb` invalidates PG14; events-svc `src` invalidates PG17. The
+  common `seeds.rb` MISSes all three fixtures, and a non-input file MISSes nothing. The rebuild after a miss is still
+  only CI/scratch evidence.
+- **Reference exposure (disclosure, not a blind solve):** `reference/fix-recently-paid` and the demo1 fix (PRs #1 and
+  #2) are public. The base tree's `BUILD-STATUS.md` names `reference/*`, and seed `main`'s `BUILD-STATUS.md`
+  describes demo1. The transcript shows the agent read neither. It ran no fetch, log or branch inspection against
+  other refs, and no GitHub reads other than its own push and PR.
+- **Cleanup (task-owned only):** `oh-cleanup` for demo2 (compose down 0), probe markers, marker DB and anonymous
+  volume removed; `work3` is left with 0 containers, volumes and task dirs. Verifier state retained, then `verify2`
+  deleted. Kept: `work3` and the conversation for review, PRs #1-#3, and the M6 `work2` sandbox. After the run the
+  snapshot is unchanged, the precheck gates are identical and disk is 43.8%. The default warm pod rotated because of
+  Raj's unrelated CRD Jira automation (run at 21:43:46), which I did not touch.
+
 ### M6 demo1 run (2026-10-15 17:04-17:45Z, live unless marked)
 
 - **Sanitize (demo-owned config only):** `warm-config.sh sanitize` (commit `4714948`) re-saved `prepared-monorepo`
@@ -367,14 +419,17 @@ anything consumed it, and the reference branch was rebased onto it. `main` was n
 
 ## Next steps
 
-1. **Human review of draft PR #1** (diff, verifier JSON, conversation `e484fb41…`). Do not merge without that review.
-2. **Decide the publish path for repeat runs:** launcher-side publish (as done) or a write-scoped token for the
-   demo org; the current provider token cannot write to `rajistics-demo`.
-3. **Optional:** delete work sandbox `447afdy9zo3lJO3FeElfPh` once review no longer needs it; optional reference
-   remediation (see Blockers) for future runs.
-4. **Optional fidelity:** NetworkPolicy between sandboxes is not in place; any claim of network isolation needs it
+1. **Human review of draft PR #3** (diff, verifier JSON, conversation `4dedd893…`). PR #1 (demo1) and PR #2 (the
+   access check) are also open drafts. Do not merge without review.
+2. **Publish path: resolved for this repo.** Since Raj added the repo to installation 164552425, the agent pushes and
+   opens PRs with the normal provider token (PR #2, PR #3). Launcher-side publishing is no longer needed here.
+3. **Guard reported SHAs:** add "full SHAs from `git rev-parse` only" to `server/AGENTS.md` / the bug-report prompt,
+   and have `oh-verify` (or the launcher) check any SHA quoted in the PR body against git. Raised by demo2.
+4. **Optional:** delete work sandboxes `447afdy9zo3lJO3FeElfPh` (M6) and `5SQJBC9VLEKMVF96xem1WX` (M7) once
+   review no longer needs them; optional reference remediation (see Blockers) before claiming a blind solve.
+5. **Optional fidelity:** NetworkPolicy between sandboxes is not in place; any claim of network isolation needs it
    tested first. Memory headroom at 2 GiB stays thin.
-5. **Optional benchmark fidelity:** repeat the bench n≥3 per mode, and try pre-seeding inner Docker images to
+6. **Optional benchmark fidelity:** repeat the bench n≥3 per mode, and try pre-seeding inner Docker images to
    remove the ~27 s `docker load`. Report it separately from the n=1 numbers.
 
 ## Blockers / open risks
@@ -426,7 +481,9 @@ anything consumed it, and the reference branch was rebased onto it. `main` was n
     assumed to be it.
 - **M6 measured (demo1):** memory reached the 2 GiB limit (page cache) with 0 OOM in both sandboxes; inner
   `/var/lib/docker` sits on the node root filesystem, not a separate per-sandbox volume. Cross-sandbox network is
-  open (auth enforced at the app layer). The sandbox `GITHUB_TOKEN` cannot write to the demo org.
+  open (auth enforced at the app layer). At M6 the sandbox `GITHUB_TOKEN` could not write to the demo org.
+  **Resolved for this repo** after Raj added it to installation 164552425: agent-owned push and PR worked in PR #2 and
+  M7 demo2 (PR #3). Network was still open in M7.
 - **Resolved:** GitHub-hosted runner disk was enough. Peak build increase was 12.6 GB; validation ran on the
   same runner class.
 - **Resolved:** nested `dockerd` works on GitHub-hosted runners with `--privileged`, so the EC2 fallback was not
