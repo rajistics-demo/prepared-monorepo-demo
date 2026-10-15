@@ -1,6 +1,6 @@
 # Build status: prepared-monorepo-demo
 
-Last updated: 2026-10-15 16:35Z: handoff corrected; waiting on Raj's Admin Console Deploy (Opus 5.5 in Agent Canvas; Codex supervising).
+Last updated: 2026-10-15 17:00Z: admin gate passes; M5 registered additively; M6 live probes passed; LLM run held on a credential-scope decision (Opus 5.5 in Agent Canvas; Codex supervising).
 Plan: `/Users/rajiv.shah/Code/install_replicate/demo-plans/root-monorepo/technical-plan.md`
 (+ `evidence-and-decisions.md`). This file is the single place to check progress.
 
@@ -24,7 +24,7 @@ registered, pulled or run on Rajistics.
   - The cold mode rebuilt the task's dependencies (bundle, the events-svc build, service pulls, databases).
   - It did **not** include installing Ruby or base tooling, or transferring the outer image.
   - It is not a full stock-image cold start, and not a Rajistics or Root speedup.
-- **Rajistics gates** (as of 2026-10-13 02:50Z):
+- **Rajistics gates** (as of 2026-10-15; precheck-7 exit 0, Helm rev 30 deployed 16:42:07Z):
 
   | Gate | Result | Next action |
   |---|---|---|
@@ -34,7 +34,7 @@ registered, pulled or run on Rajistics.
   | Live capacity (13:20Z) | node requests 4735m CPU (59%) / 10.3 GiB (33%); 17.9 GB memory available; no pressure conditions; 22 Running pods; runtime deploys warm 1, sessions 16 (was 10 at 10-12 23:09Z, with Running pods and requests unchanged, so the new ones are likely scaled to zero). Evidence: `rajistics-evidence/2026-10-12/capacity-refresh-2026-10-13.txt` | recheck right before `save` |
   | Resource envelope | ok in CI, [run 38337793281](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38337793281): full verify PASS at 1 CPU / 2048Mi, 0 OOM, ephemeral 3.07 GB of 10Gi. **Thin memory headroom:** 2,219 `memory.max` events | live recheck in M6 |
   | Anonymous pull | **ok** 2026-10-13 13:17Z: anonymous token issued, manifest HEAD **200** for `prepared-monorepo-sandbox@sha256:b5626174…fd9e0` and `prepared-monorepo-events-svc@sha256:d493cf9b…cac6ba` (full digests in `rajistics-evidence/2026-10-12/anon-head-after-public.txt`). Raj made both packages public in the UI. Package metadata API not readable (token lacks `read:packages`) | none |
-  | Runtime API admin | **FAIL: not set** (2026-10-15). Raj's earlier "password set" was a **shared conversation secret in OpenHands /settings/secrets**, not the Admin Console item (confirmed from his screenshot by the supervisor). Live state at 16:14Z: Helm `openhands` rev 29, Secret `admin-password` empty, challenge 403. The agent does not read or use that conversation secret. Evidence: `rajistics-evidence/2026-10-12/precheck-6.txt`, `deploy-state-2026-10-15.txt` | **Raj:** Admin Console → Config → Sandbox Configuration → Runtime API Admin Password → Save config → review diff → Deploy → Dashboard Ready. Recommended: use a newly generated value, and remove the conversation secret (sandboxes can read shared secrets, including the demo agent's) |
+  | Runtime API admin | **ok** (2026-10-15, precheck-7 SSM `2262dceb` exit 0; admin challenge succeeds). Raj set the Admin Console item and deployed: Helm `openhands` rev 30 (chart `openhands-0.81.0`, app `1.71.0`) reached `deployed` at 16:42:07Z with all pods Ready. The stray `Runtime_API_Admin_Password` conversation secret was never read or used; it is **not present** in the demo API key's org (`Enterprise Org` 8b24fd08…, 28 personal + 1 org-shared names listed, no runtime/admin/password match). Evidence: `rajistics-evidence/2026-10-12/precheck-7.txt`, `deploy-state-2026-10-15.txt` | none |
 
 | Milestone | State | Evidence |
 |---|---|---|
@@ -45,8 +45,59 @@ registered, pulled or run on Rajistics.
 | M4 In-image validation (nested dockerd, prepared mode, isolation probe, induced-failure rollback, cold vs prepared timing) | **done** | [run 38316367328](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38316367328), artifact `validation-38316367328`; see "M4 evidence" |
 | M4b Sizing probe (whole-sandbox cgroup peaks; prepared run under Rajistics default 1 CPU / 2048Mi) | **done** | [run 38317624879](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38317624879); see "Sizing evidence" |
 | M4c Rajistics-envelope gate (agent-server live, full `oh-verify --mode prepared` at 1 CPU / 2048Mi / no swap, ephemeral bytes) | **done, PASS** | [run 38337793281](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38337793281), workflow `envelope.yml` |
-| M5 Additive Rajistics registration (`prepared-monorepo` warm config beside `v1_current`) | **blocked** (pull auth, runtime-api admin disabled) | `env/rajistics/`; local evidence `../rajistics-evidence/2026-10-12/` |
-| M6 Live E2E demo on Rajistics (agent red/fix/green, demo branch, fresh verify, Sysbox and isolation probes, cleanup) | not started (needs M5) | none |
+| M5 Additive Rajistics registration (`prepared-monorepo` warm config beside `v1_current`) | **done** (2026-10-15, SSM `2b2f727a`): exact digest `prepared-monorepo-sandbox@sha256:b5626174…fd9e0`, count 0 (no warm pods); `v1_current` config hash unchanged; disk 44.8% now, 53.3% projected | `rajistics-evidence/2026-10-12/save-1.txt`, `capacity-settled-2026-10-15.txt` |
+| M6 Live E2E demo on Rajistics (agent red/fix/green, demo branch, fresh verify, Sysbox and isolation probes, cleanup) | **in progress**: sandbox start, Sysbox, prepare and isolation probes **PASS**; LLM conversation **held** on credential scope (see "M6 live progress") | see "M6 live progress" |
+
+### M6 live progress (2026-10-15, Rajistics app 1.71.0 / chart 0.81.0 / runtime-api 0.11.1)
+
+What each line is: **live** = observed on Rajistics today; **source** = read from OpenHands/enterprise tag `1.71.0`
+(`f7789f9e`); **proposed** = not yet done.
+
+- **Work sandbox (live):** `6FaTBQrwWqG7R9Y9Xte4Al`, spec = pinned demo digest, created 16:47:44Z, RUNNING in
+  **62.1 s** including the first pull of the image on the node (transient PVC-not-found and ingress 503 states during
+  start). Pod `runtime-trdikrwxrxcneyyf-…` runs `runtimeClass=sysbox-runc` with the exact pinned digest, 0 restarts,
+  no node pressure. Evidence: `work-sandbox.json`, `pod-digest.txt`.
+- **Sysbox / user namespace (live):** agent user `openhands` uid 10001; `/proc/self/uid_map` = `0 2714304512 65536`
+  (container root maps to an unprivileged host uid range); cgroup v2. The agent user is in group `sudo` and
+  **passwordless `sudo` works** (inherited from the agent-server base image), so `sudo docker ps` lists the task's
+  containers. Root here is root only inside the Sysbox user namespace. Consequence: in-sandbox rules such as "the agent
+  must not run `oh-cleanup`" or "use only prepare/verify tools" are instructions, not enforcement. Isolation that matters
+  is between sandboxes (separate pods/userns) and is enforced by credentials and runtime, not by the prompt.
+  Evidence: `sysbox-id.txt`.
+- **Prepare (live):** first attempt without `AUTH_MODE` failed closed at `auth_gate` (exit 78), as designed.
+  `AUTH_MODE=none prepare-workspace --sha 5263a4b… --run-id work1b`: **READY in 33.3 s**, no cache misses. A second
+  task `iso2` in the same sandbox: READY in 14.0 s. Evidence: `prep-work1b.txt`, `iso-probe-1.txt`.
+- **Isolation probe (live):** `env/scripts/isolation-probe.py work1b iso2` → **ok, all 8 checks**: concurrent marker
+  writes in `server_primary_test`, `server_ledger_test`, `server_events_test`, each task saw only its own marker;
+  distinct Compose projects (`oh-work1b`/`oh-iso2`), containers, volumes, ports and checkouts. Scope: two tasks in one
+  sandbox; not inter-sandbox or credential isolation. Evidence: `iso-probe-1.txt`.
+- **Memory (live, sandbox cgroup):** limit 2 GiB / 1 CPU. With both tasks up: anon 541 MB, the rest reclaimable page
+  cache; PSI some/full avg10/60/300 = 0; `oom`/`oom_kill` = 0; `memory.max` events 1,800 (reclaim at limit, matching
+  the CI envelope's 2,219). Not treated as pressure. Evidence: `mem-env-work.txt`, `iso-probe-1.txt`.
+- **Cleanup (live, task-owned only):** `oh-cleanup --task …/iso2 --remove-task-dir` (compose down 0) and the failed
+  `work1` dir removed. `work1b` kept for the agent run. Evidence: `iso-cleanup-1.txt`.
+- **Credential inheritance (live + source) — reason the LLM run is held:**
+  - The demo spec copied `v1_current`'s environment by design (warm pods are claimed by exact env match). That env
+    includes **static `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_REGION_NAME`** and `LMNR_PROJECT_API_KEY`;
+    all four are populated in the demo sandbox (lengths only checked). Every `v1_current` sandbox has the same values
+    today; that baseline is unchanged.
+  - The demo LLM path does **not** need them (live): the active profile `Openhands` uses LLM profile
+    `Bedrock-Claude-Sonnet-4-6` = `openhands/us.anthropic.claude-sonnet-4-6` via the in-cluster
+    `openhands-litellm` proxy; the key arrives through the app's refresh URL.
+  - `POST /api/v1/sandboxes` accepts only `sandbox_spec_id` (1.71.0 OpenAPI), so there is no per-sandbox env override.
+    Removing the AWS keys from the demo means re-saving the **demo-owned** `prepared-monorepo` entry without them
+    (`v1_current` untouched). That is a runtime config write beyond "register additively", so it needs Raj's/
+    supervisor's OK. Alternative: run with an explicit disclosure that baseline static AWS credentials are present in
+    the sandbox env. Either way the run must not use AWS, and this does **not** touch Root's SSO problem.
+  - Conversation secrets (source): `user_context.get_secrets()` returns **all** personal + org-shared secrets for the
+    API key's org; agent profiles have no secret allowlist in 1.71.0. A request-scoped `secrets` entry with the same
+    name replaces the stored value for that conversation only (`live_status_app_conversation_service.py`, "API-provided
+    secret overrides existing secret"). Proposed for the demo start: shadow every inherited name except the ones the run
+    needs with a non-sensitive placeholder, including `Runtime_API_Admin_Password` defensively. This is masking for one
+    conversation, not access control, and is disclosed as such.
+- **Not yet run (proposed, in order):** demo agent conversation in `6FaTBQrwWqG7R9Y9Xte4Al` (red at base, fix, green)
+  → publish the work commit to a demo branch → fresh sandbox `oh-verify` at the published SHA → retain evidence →
+  `oh-cleanup` of task-owned state and delete only the demo sandboxes.
 
 ### M2 verifier evidence (run 38305818289, `oh-verify --mode cold` on a GitHub runner)
 
@@ -322,9 +373,9 @@ anything consumed it, and the reference branch was rebased onto it. `main` was n
   - The run report also records whether the agent's transcript shows any fetch or read of `reference/*`, the fix
     SHA or `BUILD-STATUS.md`. This is a factual observation and does not replace the disclosure.
   - Even if Raj later remediates, the disclosure still applies to any run that started before remediation.
-- **Blocks M5: runtime-api admin disabled.**
-  - Root cause: Admin Console item `admin_password` is empty. runtime-api 0.10.0 treats empty as disabled.
-  - Fix prepared (`env/rajistics/admin-setting.md`); Raj must enter the password.
+- **Resolved (2026-10-15): runtime-api admin.** Raj set and deployed `admin_password` (Helm rev 30). The deploy also upgraded the release: chart 0.76.0 → **0.81.0**, app 1.68.1 → **1.71.0**, runtime-api 0.10.0 → **0.11.1** (node report). The default sandbox image is still `agent-server:1.50.1-python` (live `sandbox-specs`), which is the demo image's base; `server_info` reports `sdk_version` 1.50.1.
+  - Prior 0.10.0 findings were rechecked against 0.11.1 and 1.71.0: the M5 save path and the `POST /api/v1/sandboxes?sandbox_spec_id=` create path both worked live.
+  - `env/rajistics/admin-setting.md` is kept as the runbook for that step.
 - **Raj's ~50 GB image:** not found on the node (outer containerd, nested Docker, PVs). Its location is
   **unverified**.
   - A stopped `replicated-openhands` instance and unattached 50 GB EBS volumes exist; they were not inspected.
