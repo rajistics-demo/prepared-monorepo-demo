@@ -4,6 +4,7 @@
 #
 #   warm-config.sh precheck <image-ref>          read-only gates; exits nonzero if any gate fails
 #   warm-config.sh save     <image-ref> <count>  template v1_current -> save DEMO_NAME (additive)
+#   warm-config.sh sanitize <image-ref>          re-save DEMO_NAME from itself minus SANITIZE_DROP env keys
 #   warm-config.sh delete                        remove DEMO_NAME (rollback); refuses anything else
 #   warm-config.sh snapshot                      non-secret view of all configs + warm pods
 #
@@ -13,6 +14,7 @@
 set -u
 DEMO_NAME="prepared-monorepo"
 DEMO_IMAGE_REPO="ghcr.io/rajistics-demo/prepared-monorepo-sandbox"
+SANITIZE_DROP="AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN"   # credential env keys the demo must not inherit
 # Disk model inputs (bytes). Defaults come from CI measurements of the current image; see env/rajistics/README.md.
 NEW_COMPRESSED="${NEW_COMPRESSED:-1072481526}"   # compressed layers not shared with the 1.50.1 base
 NEW_UNPACKED="${NEW_UNPACKED:-2997473430}"       # prepared unpacked (6242167574) minus base unpacked (3244694144)
@@ -157,11 +159,55 @@ case "$MODE" in
     shred -u "$WORK/cfg.json" 2>/dev/null || rm -f "$WORK/cfg.json"
     grep '^Saved ' "$WORK/s.out" || { echo "FAIL save rc=$rc $(errcode "$WORK/s.out")"; exit 2; }
     sleep 5; echo "== after"; snapshot ;;
+  sanitize)
+    # Re-save the existing demo-owned entry from itself, minus credential env keys. Nothing else changes.
+    IMAGE="${1:?image}"
+    echo "== before"; snapshot > "$WORK/before.txt" || { echo "ABORT: before snapshot failed, nothing saved"; exit 1; }
+    cat "$WORK/before.txt"
+    state=$(ownership "$IMAGE" | sed -n 's/^STATE //p'); [ "$state" = owned ] || { echo "ABORT: $DEMO_NAME is not demo-owned (state=${state:-collision})"; exit 1; }
+    python3 "$CLI" template "$DEMO_NAME" --output "$WORK/cfg.json" 2>"$WORK/t.err" || { echo "FAIL template: $(errcode "$WORK/t.err")"; exit 2; }
+    python3 - "$WORK/cfg.json" "$WORK/list.json" "$DEMO_NAME" "$IMAGE" $SANITIZE_DROP <<'PY' || { rm -f "$WORK/cfg.json"; echo "ABORT: sanitize check failed, nothing saved"; exit 1; }
+import json, sys
+cfg_p, list_p, name, image, *drop = sys.argv[1:]
+cfg = json.load(open(cfg_p))
+cur = next(c for c in json.load(open(list_p)) if c.get("name") == name)
+assert cfg.get("image") == image == cur.get("image"), "image mismatch"
+env = dict(cfg.get("environment") or {})
+removed = sorted(k for k in drop if k in env)
+for k in removed: del env[k]
+new = dict(cfg, environment=env)
+fields = sorted(k for k in (set(new) | set(cur)) - {"name", "source"} if k != "environment" and new.get(k) != cur.get(k))
+cur_env = cur.get("environment") or {}
+changed_vals = sorted(k for k in env if cur_env.get(k) != env[k])
+print("SANITIZE removed_env_names:", removed, "| absent_already:", sorted(set(drop) - set(removed)))
+print("SANITIZE other_field_changes:", fields, "| kept_env_value_changes:", changed_vals,
+      "| added_env_names:", sorted(set(env) - set(cur_env)))
+if fields or changed_vals or set(env) - set(cur_env): sys.exit("unexpected diff beyond removed keys")
+json.dump(new, open(cfg_p, "w"))
+PY
+    python3 "$CLI" save "$DEMO_NAME" --file "$WORK/cfg.json" >"$WORK/s.out" 2>&1; rc=$?
+    shred -u "$WORK/cfg.json" 2>/dev/null || rm -f "$WORK/cfg.json"
+    grep '^Saved ' "$WORK/s.out" || { echo "FAIL save rc=$rc $(errcode "$WORK/s.out")"; exit 2; }
+    sleep 5; echo "== after"; snapshot > "$WORK/after.txt"; cat "$WORK/after.txt"
+    python3 - "$WORK/before.txt" "$WORK/after.txt" "$DEMO_NAME" $SANITIZE_DROP <<'PY'
+import json, sys
+def cfgs(p):
+    t = open(p).read(); return {c["name"]: c for c in json.loads(t[:t.index("== warm pods")])}
+b, a, name, drop = cfgs(sys.argv[1]), cfgs(sys.argv[2]), sys.argv[3], sys.argv[4:]
+others = sorted((set(b) | set(a)) - {name})
+same = all(b.get(n, {}).get("sha256_full_config") == a.get(n, {}).get("sha256_full_config") for n in others)
+print("VERIFY non-demo configs unchanged:", "ok" if same else "FAIL", others)
+left = [k for k in drop if k in a[name]["env_names"]]
+print("VERIFY demo env free of dropped keys:", "ok" if not left else f"FAIL {left}")
+print("VERIFY demo image unchanged:", "ok" if a[name]["image"] == b[name]["image"] else "FAIL")
+sys.exit(0 if same and not left and a[name]["image"] == b[name]["image"] else 1)
+PY
+    ;;
   delete)
     echo "== before"; snapshot || { echo "ABORT: before snapshot failed, nothing deleted"; exit 1; }
     state=$(ownership "" | sed -n 's/^STATE //p'); [ "$state" = owned ] || { echo "ABORT: $DEMO_NAME is not a demo-owned config (state=${state:-collision})"; exit 1; }
     python3 "$CLI" delete "$DEMO_NAME" >"$WORK/d.out" 2>&1 || { echo "FAIL delete $(errcode "$WORK/d.out")"; exit 2; }
     echo "deleted $DEMO_NAME"
     sleep 5; echo "== after"; snapshot ;;
-  *) echo "usage: warm-config.sh precheck <image>|save <image> <count>|delete|snapshot"; exit 1 ;;
+  *) echo "usage: warm-config.sh precheck <image>|save <image> <count>|sanitize <image>|delete|snapshot"; exit 1 ;;
 esac
