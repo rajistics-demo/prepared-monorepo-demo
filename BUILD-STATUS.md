@@ -1,6 +1,6 @@
 # Build status: prepared-monorepo-demo
 
-Last updated: 2026-10-15 16:20Z, after Raj reported "password set": precheck-6 (SSM `e8a9d929`) and deploy-state check (SSM `91b54bdd`) (Opus 5.5 in Agent Canvas; Codex supervising).
+Last updated: 2026-10-15 16:35Z: handoff corrected; waiting on Raj's Admin Console Deploy (Opus 5.5 in Agent Canvas; Codex supervising).
 Plan: `/Users/rajiv.shah/Code/install_replicate/demo-plans/root-monorepo/technical-plan.md`
 (+ `evidence-and-decisions.md`). This file is the single place to check progress.
 
@@ -34,7 +34,7 @@ registered, pulled or run on Rajistics.
   | Live capacity (13:20Z) | node requests 4735m CPU (59%) / 10.3 GiB (33%); 17.9 GB memory available; no pressure conditions; 22 Running pods; runtime deploys warm 1, sessions 16 (was 10 at 10-12 23:09Z, with Running pods and requests unchanged, so the new ones are likely scaled to zero). Evidence: `rajistics-evidence/2026-10-12/capacity-refresh-2026-10-13.txt` | recheck right before `save` |
   | Resource envelope | ok in CI, [run 38337793281](https://github.com/rajistics-demo/prepared-monorepo-demo/actions/runs/38337793281): full verify PASS at 1 CPU / 2048Mi, 0 OOM, ephemeral 3.07 GB of 10Gi. **Thin memory headroom:** 2,219 `memory.max` events | live recheck in M6 |
   | Anonymous pull | **ok** 2026-10-13 13:17Z: anonymous token issued, manifest HEAD **200** for `prepared-monorepo-sandbox@sha256:b5626174…fd9e0` and `prepared-monorepo-events-svc@sha256:d493cf9b…cac6ba` (full digests in `rajistics-evidence/2026-10-12/anon-head-after-public.txt`). Raj made both packages public in the UI. Package metadata API not readable (token lacks `read:packages`) | none |
-  | Runtime API admin | **FAIL: saved but not deployed** (2026-10-15 16:14Z). Raj reported the password set, but Helm `openhands` is still rev 29 (2026-10-05 20:24Z), Secret `admin-password` is still empty (last written 2026-07-20), the core pods have not restarted since 2026-10-05 20:25Z, and `GET /api/admin/challenge` returns 403. No KOTS CLI on the node, so the pending version is inferred, not read. Evidence: `rajistics-evidence/2026-10-12/precheck-6.txt`, `deploy-state-2026-10-15.txt` | **Raj: Admin Console → Version history → Deploy the new sequence created by Save config** (or Config → Save config first if it was not saved) |
+  | Runtime API admin | **FAIL: not set** (2026-10-15). Raj's earlier "password set" was a **shared conversation secret in OpenHands /settings/secrets**, not the Admin Console item (confirmed from his screenshot by the supervisor). Live state at 16:14Z: Helm `openhands` rev 29, Secret `admin-password` empty, challenge 403. The agent does not read or use that conversation secret. Evidence: `rajistics-evidence/2026-10-12/precheck-6.txt`, `deploy-state-2026-10-15.txt` | **Raj:** Admin Console → Config → Sandbox Configuration → Runtime API Admin Password → Save config → review diff → Deploy → Dashboard Ready. Recommended: use a newly generated value, and remove the conversation secret (sandboxes can read shared secrets, including the demo agent's) |
 
 | Milestone | State | Evidence |
 |---|---|---|
