@@ -1,6 +1,6 @@
 # Build status: prepared-monorepo-demo
 
-Last updated: 2026-10-16 02:00Z: M8 demo10g complete. Full 9.6 GB synthetic settlement corpus materialized live in a task-owned sandbox under a 10 GiB task budget; agent red/fix/green, own push and draft PR #4 at `3bb23b7`; fresh exact-SHA verifier PASS in a separate sandbox; task-only cleanup; baseline unchanged (Opus 5.5 in Agent Canvas; Codex supervising).
+Last updated: 2026-10-16 02:40Z: M9 demo10g-repeat complete. Fresh task-owned run on the same 10 GB base `b05805e`: full 731-file corpus materialized live (90.1 s), agent ASSERTION_RED → GREEN → suite GREEN, own push and draft PR #5 at `287e2ae`, fresh exact-SHA verifier PASS in a separate sandbox, PR CI green, task-only cleanup, baseline unchanged. Commits unsigned (expired injected GPG key); prior answer PR #4 was public (instructed, audited non-read; not a blind solve). Opus 5.5 in Agent Canvas; Codex supervising.
 Plan: `/Users/rajiv.shah/Code/install_replicate/demo-plans/root-monorepo/technical-plan.md`
 (+ `evidence-and-decisions.md`). This file is the single place to check progress.
 
@@ -9,7 +9,7 @@ Plan: `/Users/rajiv.shah/Code/install_replicate/demo-plans/root-monorepo/technic
 **Rollout scope:** Raj has authorized registering the new image on Rajistics and running the demo end to end,
 on condition that his existing image and workloads are left alone.
 
-**State:** M0-M8 done. M8 demo10g ran end to end on Rajistics on 2026-10-16 against the ~10 GB base `demo/base-10g-v1` (`b05805e`, branch `demo10g/main`): draft [PR #4](https://github.com/rajistics-demo/prepared-monorepo-demo/pull/4) at `3bb23b7` awaits human review (see "M8 demo10g run"). M7 demo2 ran end to end on Rajistics on 2026-10-15 with agent-owned publication (see "M7
+**State:** M0-M9 done. M9 demo10g-repeat (2026-10-16 02:13-02:27Z) repeated the full run fresh: draft [PR #5](https://github.com/rajistics-demo/prepared-monorepo-demo/pull/5) at `287e2ae` awaits human review (see "M9 demo10g-repeat run"). M8 demo10g ran end to end on Rajistics on 2026-10-16 against the ~10 GB base `demo/base-10g-v1` (`b05805e`, branch `demo10g/main`): draft [PR #4](https://github.com/rajistics-demo/prepared-monorepo-demo/pull/4) at `3bb23b7` awaits human review (see "M8 demo10g run"). M7 demo2 ran end to end on Rajistics on 2026-10-15 with agent-owned publication (see "M7
 demo2 run"): draft [PR #3](https://github.com/rajistics-demo/prepared-monorepo-demo/pull/3) at `0d5c346` awaits
 human review. The M6 demo1 draft [PR #1](https://github.com/rajistics-demo/prepared-monorepo-demo/pull/1) was
 launcher-published because the sandbox token got 403. After Raj added this repo to GitHub App installation
@@ -53,6 +53,7 @@ launcher-published because the sandbox token got 403. After Raj added this repo 
 | M6 Live E2E demo on Rajistics (agent red/fix/green, demo branch, fresh verify, Sysbox and isolation probes, cleanup) | **done (demo1), human review pending**: agent red/fix/green; launcher-published draft PR #1 (agent push 403); fresh `oh-verify` **PASS** at `173e2a0`; FS/Docker/DB separation across sandboxes, network **not** isolated (auth enforced) | see "M6 demo1 run"; private `rajistics-evidence/2026-10-12/m6-demo1/REPORT.md` |
 | M7 demo2: agent-owned publication, fresh verify of the published SHA, invalidation probe | **done, human review pending**: agent red/fix/green, then its own push and draft PR #3 at `0d5c346` with the normal provider token; fresh `oh-verify` **PASS** in a separate sandbox; cache keys HIT for the agent commit and MISS only for the perturbed input; test SHA in the PR body corrected after the fact | see "M7 demo2 run"; private `rajistics-evidence/2026-10-12/m7-demo2/REPORT.md` |
 | M8 demo10g: ~10 GB synthetic corpus (OCI data artifact), full live materialization, agent run, fresh verify | **done, human review pending**: 731 files / 9,596,945,070 B materialized live in 138.6 s inside a 10 GiB task budget; agent ASSERTION_RED → GREEN → suite GREEN, own push and draft PR #4 at `3bb23b7`; fresh verifier **PASS** at the published SHAs; PR CI green; task sandboxes deleted | `rajistics-evidence/2026-10-12/m8-demo10g/`, `m8-corpus/`; see "M8 demo10g run" |
+| M9 demo10g-repeat: fresh repeat on the same base, new sandbox/conversation/branch | **done, human review pending**: 731 files / 9,596,945,070 B materialized live in 90.1 s; ASSERTION_RED at 84.3 s after conversation POST; draft PR #5 at `287e2ae` 190.5 s after POST; fresh verifier **PASS**; PR CI green; commits unsigned | `rajistics-evidence/2026-10-12/m9-demo10g-repeat/` (`REPORT.md`, `timings.json`) |
 
 ### M6 live progress (2026-10-15, Rajistics app 1.71.0 / chart 0.81.0 / runtime-api 0.11.1)
 
@@ -101,6 +102,35 @@ What each line is: **live** = observed on Rajistics today; **source** = read fro
     secret overrides existing secret"). Proposed for the demo start: shadow every inherited name except the ones the run
     needs with a non-sensitive placeholder, including `Runtime_API_Admin_Password` defensively. This is masking for one
     conversation, not access control, and is disclosed as such.
+
+### M9 demo10g-repeat run (2026-10-16 02:13-02:27Z, live unless marked)
+
+Full record: `rajistics-evidence/2026-10-12/m9-demo10g-repeat/REPORT.md`; machine-readable `timings.json`.
+
+- **Identity:** conversation `7169dedab6f54d339fd0bf63d8275dd6`; image `prepared-monorepo-sandbox@sha256:b5626174…`
+  (unchanged); corpus manifest sha256 `2803ec90…` (`settlements-v1`, unchanged); base `b05805e2c88967f4c8f9e88a395feee66b59b52c`,
+  test `16f05c3aafed50d98215c22ae81460cd7e37917b`, head `287e2aeadee88185bed2c6b0c8fed1842bcc5d4d` (= remote ref = PR head).
+- **Measured (s):** work sandbox create 21.3; prepare-workspace 32.9 (READY, 0 cache misses); full materialization 90.1
+  (731 files, 9.60 GB logical, 2.38 GB compressed streamed, maxRSS 35 MiB, 0 OOM, node free −9.54 GB, 37 GB above floor);
+  conversation POST→READY 10.7; POST→ASSERTION_RED 84.3; POST→draft PR 190.5; POST→finish 199.9; verifier sandbox
+  create 21.3; verifier script 127.1 (2-day corpus subset 16.4, `oh-verify` 110.4). Total 814.8 incl. 321.7 operator gaps.
+- **Verifier (new sandbox, anonymous clone, own DBs):** PASS, no flags; red at base ASSERTION_RED (same assertion);
+  suite at head GREEN 25 pass; static checks clean; independent state true. Fetched only the 2 days the tests reference
+  from the same immutable corpus (not another full 10 GB materialization).
+- **Publication:** PR #5 opened by `rajshah4` via GitHub App `openhands-rajistics-demo` (normal provider token); CI run
+  38840049987 success (`server-suite`, `events-svc`, `secret-scan`; `verifier` job skipped). PR body SHAs correct; the
+  body omits the base SHA.
+- **Signing (reproduced M8 finding):** `.gitconfig` and `~/.gnupg` appear at conversation start with expired key
+  `BC3BF8BAFBA1B71C`; plain commits fail `Unusable secret key`; the agent committed with per-command
+  `-c commit.gpgsign=false` (synthetic-demo policy). `demo10g/main` has no protection or rulesets, so signing is not a
+  required gate. Both commits `unsigned`. Nothing changed.
+- **Public prior answer:** PR #4 was reachable; the prompt disclosed it and forbade other refs, PRs and BUILD-STATUS reads.
+  The transcript audit shows no such reads. Not a blind solve.
+- **Secrets / baseline / cleanup:** 29 unrelated secrets masked, only `GITHUB_TOKEN` kept; 0 AWS key envs. Runtime
+  configs, warm pods, Helm releases, deployments and node images identical pre and post. Only `work10gr` and `verify10gr`
+  were deleted. Automation and Git Sync had no pre-snapshot (post-run GET-only read recorded; this run made no writes).
+- **Compared with M8 (n=1 each, same node and image):** full materialization 90.1 s vs 138.6 s. Treat this as
+  run-to-run variance, not a trend.
 
 ### M8 demo10g run (2026-10-16 01:33-01:52Z, live unless marked)
 
@@ -509,7 +539,7 @@ anything consumed it, and the reference branch was rebased onto it. `main` was n
 
 ## Blockers / open risks
 
-- **Open (M8): expired GPG signing config in conversation sandboxes.** See "M8 demo10g run". Not changed.
+- **Open (M8): expired GPG signing config in conversation sandboxes.** See "M8 demo10g run". Reproduced in M9 (identical behavior). Not changed.
 - **Resolved: pull auth.** Raj made both packages public (anonymous HEAD 200 at both pinned digests). No
   credential was created. Digests and tags were unchanged.
 - **Not a gate; disclosure required: reference fix is publicly readable.** The acceptance criteria allow either
