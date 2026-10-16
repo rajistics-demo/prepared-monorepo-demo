@@ -129,6 +129,11 @@ Full record: `rajistics-evidence/2026-10-12/m9-demo10g-repeat/REPORT.md`; machin
 - **Secrets / baseline / cleanup:** 29 unrelated secrets masked, only `GITHUB_TOKEN` kept; 0 AWS key envs. Runtime
   configs, warm pods, Helm releases, deployments and node images identical pre and post. Only `work10gr` and `verify10gr`
   were deleted. Automation and Git Sync had no pre-snapshot (post-run GET-only read recorded; this run made no writes).
+- **Carried-forward limitations (not resolved by M9):** the protected ~50 GB image location was not established, and
+  `v1_current` must not be equated with it. The kubelet image GC/eviction output was empty, which is missing evidence,
+  not proof of defaults. Network isolation between sandboxes is unvalidated.
+- **Deck figures (Codex-verified):** startup 21.3 s, prep 32.9 s, full fetch 90.1 s, POST→PR 190.5 s, verifier wrapper
+  127.5 s plus 21.3 s verifier startup, operator total 814.8 s.
 - **Compared with M8 (n=1 each, same node and image):** full materialization 90.1 s vs 138.6 s. Treat this as
   run-to-run variance, not a trend.
 
