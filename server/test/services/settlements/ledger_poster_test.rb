@@ -2,7 +2,7 @@ require "test_helper"
 
 module Settlements
   class LedgerPosterTest < ActiveSupport::TestCase
-    DAY = Date.new(2024, 1, 2)
+    DAY = Date.iso8601("2024-01-02")
 
     test "posts every row of a settlement day into the ledger database" do
       entry = Corpus.entry_for(DAY)

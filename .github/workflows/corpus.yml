@@ -154,7 +154,7 @@ jobs:
           path: ${{ runner.temp }}/pins
       - name: Use freshly published pins
         if: env.PUBLISH == 'true'
-        run: cp "$RUNNER_TEMP/pins/manifest.json" "$RUNNER_TEMP/pins/corpus.lock.json" "$DEST/"
+        run: mkdir -p "$DEST" && cp "$RUNNER_TEMP/pins/manifest.json" "$RUNNER_TEMP/pins/corpus.lock.json" "$DEST/"
       - name: Pins present
         id: pins
         run: |

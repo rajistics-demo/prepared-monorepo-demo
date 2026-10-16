@@ -43,6 +43,7 @@ import oci
 
 CHUNK = 1 << 20
 DATE_RE = re.compile(r"\b(20(?:24|25)-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01]))\b")
+DATE_NEW_RE = re.compile(r"Date\.new\(\s*(20(?:24|25))\s*,\s*(\d{1,2})\s*,\s*(\d{1,2})\s*\)")
 
 
 class Gate(Exception):
@@ -112,8 +113,15 @@ def wanted_days(args, manifest):
     if args.only:
         picked |= set(args.only.split(","))
     if args.only_from_tests:
+        found = set()
         for p in Path(args.only_from_tests).rglob("*.rb"):
-            picked |= set(DATE_RE.findall(p.read_text(errors="ignore")))
+            text = p.read_text(errors="ignore")
+            found |= set(DATE_RE.findall(text))
+            found |= {f"{y}-{int(m):02d}-{int(d):02d}" for y, m, d in DATE_NEW_RE.findall(text)}
+        if not found & set(all_days):
+            print(f"FAIL GATE: --only-from-tests found no settlement days under {args.only_from_tests}", file=sys.stderr)
+            sys.exit(3)
+        picked |= found
     if not args.only and not args.only_from_tests:
         return set(all_days)
     picked &= set(all_days)

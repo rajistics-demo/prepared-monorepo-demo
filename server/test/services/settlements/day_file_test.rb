@@ -2,7 +2,7 @@ require "test_helper"
 
 module Settlements
   class DayFileTest < ActiveSupport::TestCase
-    DAY = Date.new(2024, 1, 2)
+    DAY = Date.iso8601("2024-01-02")
 
     test "parses a materialized settlement day and matches the manifest's processor totals" do
       entry = Corpus.entry_for(DAY)
