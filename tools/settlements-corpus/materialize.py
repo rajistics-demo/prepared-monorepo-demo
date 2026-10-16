@@ -6,8 +6,10 @@
                  [--report out.json] [--verify-only]
 
 Inputs are the committed server/data/settlements/manifest.json and corpus.lock.json
-at the checked-out commit. The lock pins the manifest's sha256 and each release
-asset's size and sha256; the manifest pins every file's size and sha256.
+at the checked-out commit. The lock pins the manifest's sha256, the OCI data artifact
+(repository + manifest digest), and each shard blob's size and sha256; the manifest
+pins every file's size and sha256. Shards are pulled anonymously by blob digest from
+the public package, so the tag is never trusted.
 
 Each needed shard is fetched over HTTPS and piped straight through gzip and tar
 into the destination: no archive or partial expanded copy is retained. Every file
@@ -35,8 +37,9 @@ import re
 import sys
 import tarfile
 import time
-import urllib.request
 from pathlib import Path
+
+import oci
 
 CHUNK = 1 << 20
 DATE_RE = re.compile(r"\b(20(?:24|25)-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01]))\b")
@@ -126,13 +129,13 @@ def present_ok(path: Path, entry, deep: bool) -> bool:
     return sha256_file(path) == entry["sha256"] if deep else True
 
 
-def fetch_shard(asset, entries_by_path, need, dest: Path, floor: int, report):
-    """Stream one asset into dest. Returns list of written paths. Raises on failure (after rollback)."""
+def fetch_shard(source, asset, entries_by_path, need, dest: Path, floor: int, report):
+    """Stream one shard blob into dest. Returns list of written paths. Raises on failure (after rollback)."""
     written = []
     t0 = now()
-    req = urllib.request.Request(asset["url"], headers={"User-Agent": "settlements-corpus-materialize/1"})
+    repo = source["repository"]
     try:
-        resp = urllib.request.urlopen(req, timeout=120)
+        resp = oci.open_blob(repo, "sha256:" + asset["sha256"], oci.token(repo))
     except Exception as e:  # noqa: BLE001
         raise Net(f"{asset['name']}: {e}") from e
     first_byte = now() - t0
@@ -249,7 +252,7 @@ def main():
                     continue
                 for attempt in range(args.retries + 1):
                     try:
-                        fetch_shard(asset, entries_by_path, need, dest, args.min_node_free_bytes, report)
+                        fetch_shard(lock["source"], asset, entries_by_path, need, dest, args.min_node_free_bytes, report)
                         break
                     except Net as e:
                         if attempt == args.retries:

@@ -9,8 +9,10 @@ derived from SCHEMA and the date; there is no wall-clock or host input.
       Stream shard K's days into a reproducible tar.gz (no expanded files on disk).
   generate.py day --date 2025-03-14 --out file.csv
       Write one day (used by CI determinism checks).
-  generate.py assemble --release-tag T --repo OWNER/NAME --out-dir DIR shard-*.json
-      Merge shard manifests into manifest.json and corpus.lock.json.
+  generate.py assemble --out-dir DIR shard-*.json
+      Merge shard manifests into manifest.json.
+  generate.py lock --descriptor oci.json --manifest manifest.json --out corpus.lock.json shard-*.json
+      Pin the published OCI data artifact (see oci.py push-artifact).
 
 Shards are calendar quarters (8 for two years). Day sizes follow integer
 weekday/month weights scaled to DATA_TARGET_BYTES, so the total is fixed by
@@ -192,16 +194,25 @@ def cmd_assemble(a):
     out.mkdir(parents=True, exist_ok=True)
     mbytes = (json.dumps(manifest, indent=1) + "\n").encode()
     (out / "manifest.json").write_bytes(mbytes)
-    base = f"https://github.com/{a.repo}/releases/download/{a.release_tag}"
-    lock = {"schema": SCHEMA, "release_tag": a.release_tag, "repo": a.repo,
-            "manifest_sha256": hashlib.sha256(mbytes).hexdigest(), "generator_sha256": gen_sha,
-            "assets": [s["asset"] | {"shard": s["shard"], "url": f"{base}/{s['asset']['name']}",
-                                     "first_day": s["files"][0]["settled_on"], "last_day": s["files"][-1]["settled_on"]}
-                       for s in shards]}
-    (out / "corpus.lock.json").write_text(json.dumps(lock, indent=1) + "\n")
     t = manifest["totals"]
     print(f"files={t['files']} bytes={t['bytes']} rows={t['rows']} refunds={t['refunds']} "
           f"compressed={sum(s['asset']['bytes'] for s in shards)}")
+
+
+def cmd_lock(a):
+    """Pin the published OCI artifact. Consumers fetch shard blobs by digest, never by tag."""
+    shards = sorted((json.loads(Path(p).read_text()) for p in a.shard_manifests), key=lambda s: s["shard"])
+    desc = json.loads(Path(a.descriptor).read_text())
+    mbytes = Path(a.manifest).read_bytes()
+    if "sha256:" + hashlib.sha256(mbytes).hexdigest() != desc["manifest_json_digest"]:
+        sys.exit("manifest.json differs from the one published in the artifact")
+    lock = {"schema": SCHEMA, "manifest_sha256": hashlib.sha256(mbytes).hexdigest(),
+            "generator_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "source": {k: desc[k] for k in ("registry", "repository", "tag", "manifest_digest", "artifact_type")},
+            "assets": [s["asset"] | {"shard": s["shard"], "first_day": s["files"][0]["settled_on"],
+                                     "last_day": s["files"][-1]["settled_on"]} for s in shards]}
+    Path(a.out).write_text(json.dumps(lock, indent=1) + "\n")
+    print(json.dumps(lock["source"]))
 
 
 def main():
@@ -217,10 +228,13 @@ def main():
     d.add_argument("--date", required=True)
     d.add_argument("--out", required=True)
     m = sub.add_parser("assemble")
-    m.add_argument("--release-tag", required=True)
-    m.add_argument("--repo", required=True)
     m.add_argument("--out-dir", required=True)
     m.add_argument("shard_manifests", nargs="+")
+    k = sub.add_parser("lock")
+    k.add_argument("--descriptor", required=True)
+    k.add_argument("--manifest", required=True)
+    k.add_argument("--out", required=True)
+    k.add_argument("shard_manifests", nargs="+")
     a = ap.parse_args()
     if a.cmd == "shard":
         if a.of != SHARDS or not 1 <= a.shard <= SHARDS:
@@ -228,6 +242,8 @@ def main():
         cmd_shard(a)
     elif a.cmd == "day":
         cmd_day(a)
+    elif a.cmd == "lock":
+        cmd_lock(a)
     else:
         cmd_assemble(a)
 

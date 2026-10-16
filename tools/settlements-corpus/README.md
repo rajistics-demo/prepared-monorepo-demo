@@ -24,15 +24,24 @@ synthetic, generated from a fixed seed per day by `generate.py`. No real custome
 - `Settlements::LedgerPoster` posts a day's rows into the ledger database (PostgreSQL 14) as credits and debits.
 - `Settlements::Reconciliation` compares the ledger with the processor file for a day.
 - `bin/rails settlements:post[DAY]` and `bin/rails settlements:reconcile[DAY]` expose both steps.
-- Server tests post and reconcile specific days. A test run reads only the days it names, so most bytes are read
-  only during verification.
+- Server tests name specific days. A test run reads only the days it names, so most bytes are read only by
+  `materialize.py`.
 
 ## Where it comes from
 
-CI (`.github/workflows/corpus.yml`) generates eight quarterly shards in parallel. Each shard is a reproducible
-`tar.gz` streamed straight to a release asset on this public repository: no expanded copy is kept, and no
-Git LFS or package-visibility change is needed. The lock pins the manifest hash, and each asset's size and
-SHA-256. A release tag is never overwritten.
+CI (`.github/workflows/corpus.yml`, on a push to `corpus/<name>`) generates eight quarterly shards in parallel.
+Each shard is a reproducible `tar.gz` (about 2.6 GB compressed in total) pushed by digest as a blob. One OCI
+1.1 data artifact referencing the eight shards and `manifest.json` is then pushed under one new tag,
+`data-<name>`, in the already-public synthetic package `ghcr.io/rajistics-demo/prepared-monorepo-sandbox`.
+
+- It is a data artifact, not a container image: empty config, `artifactType`
+  `application/vnd.rajistics.settlements-corpus.v1`, and a description annotation saying so.
+- The workflow uses the repository's own `GITHUB_TOKEN` (`packages: write`), the same path `image.yml` uses.
+  No visibility, credential or package-setting change is involved.
+- The tag must not exist beforehand, and CI snapshots every existing tag's digest before and after the push
+  and fails if anything other than the one new tag changed.
+- `corpus.lock.json` pins the manifest hash, the artifact's manifest digest, and each shard blob's size and
+  SHA-256. Consumers pull anonymously by blob digest, so the tag is only a label.
 
 ## Materializing
 
