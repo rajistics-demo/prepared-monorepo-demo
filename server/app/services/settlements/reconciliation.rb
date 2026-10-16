@@ -22,7 +22,7 @@ module Settlements
     def entries = LedgerPoster.entries_for(@date)
 
     def ledger_net_cents
-      entries.group(:entry_type).sum(:amount_cents).values.sum.to_i
+      entries.sum(Arel.sql(LedgerEntry::SIGNED_AMOUNT)).to_i
     end
   end
 end
