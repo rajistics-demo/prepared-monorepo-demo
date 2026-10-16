@@ -125,20 +125,24 @@ def push_blob(repo: str, tok: str, data=None, path: Path = None, digest: str = N
         if e.code != 404:
             raise
     with _req("POST", f"https://{REGISTRY}/v2/{repo}/blobs/uploads/", tok, {"Content-Length": "0"}, b"") as r:
+        print(f"upload session: POST {r.status}", file=sys.stderr)
         loc = _abs(r.headers["Location"])
+    # Monolithic upload: one PUT carrying the whole body. GHCR answered 404 to the closing PUT of a
+    # streamed PATCH upload (run 38834214762), so PATCH is not used.
+    sep = "&" if "?" in loc else "?"
     body = data if data is not None else open(path, "rb")
     try:
-        with _req("PATCH", loc, tok, {"Content-Type": "application/octet-stream", "Content-Length": str(size)},
-                  body, timeout=1800) as r:
-            loc = _abs(r.headers["Location"])
+        with _req("PUT", f"{loc}{sep}digest={urllib.parse.quote(digest)}", tok,
+                  {"Content-Type": "application/octet-stream", "Content-Length": str(size)}, body, timeout=1800) as r:
+            print(f"upload: PUT {r.status} ({size} bytes)", file=sys.stderr)
+            if r.status != 201:
+                sys.exit(f"blob PUT returned {r.status}")
+            got = r.headers.get("Docker-Content-Digest")
+    except urllib.error.HTTPError as e:
+        sys.exit(f"blob PUT failed: HTTP {e.code} {e.read()[:300]!r}")
     finally:
         if data is None:
             body.close()
-    sep = "&" if "?" in loc else "?"
-    with _req("PUT", f"{loc}{sep}digest={urllib.parse.quote(digest)}", tok, {"Content-Length": "0"}, b"") as r:
-        if r.status != 201:
-            sys.exit(f"blob PUT returned {r.status}")
-        got = r.headers.get("Docker-Content-Digest")
     if got and got != digest:
         sys.exit(f"registry digest {got} != {digest}")
     return {"digest": digest, "size": size, "uploaded": True}
