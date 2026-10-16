@@ -16,6 +16,7 @@ module Minitest
       ActiveRecord::PendingMigrationError
       LoadError
       Bundler::GemNotFound
+      Settlements::CorpusMissing
     ].freeze
 
     def initialize(path)

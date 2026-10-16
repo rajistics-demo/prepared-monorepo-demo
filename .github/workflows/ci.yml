@@ -8,7 +8,7 @@ name: ci
 
 on:
   push:
-    branches: ["main", "reference/**"]
+    branches: ["main", "reference/**", "demo10g/**"]
   pull_request:
   workflow_dispatch:
 
@@ -59,6 +59,12 @@ jobs:
       - name: dev:bootstrap (custom db:setup replacement)
         working-directory: server
         run: bin/rails dev:bootstrap
+      - name: Settlement corpus (only the days the tests name)
+        if: hashFiles('server/data/settlements/corpus.lock.json') != ''
+        run: |
+          mkdir -p server/tmp/evidence
+          python3 tools/settlements-corpus/materialize.py --only-from-tests server/test \
+            --min-node-free-bytes 3000000000 --report server/tmp/evidence/corpus-materialize.json
       - name: Full server suite
         working-directory: server
         env:

@@ -1,0 +1,102 @@
+{
+ "schema": "settlements-v1",
+ "manifest_sha256": "2803ec90ad03d3080fc874be0605d3c2749a324b4402a921f129237cc6f0ed21",
+ "generator_sha256": "3c606edbcd663e99ffb4b19714dc5ba1a874eed0d5e7db449e5ea61e6c62dbd5",
+ "source": {
+  "registry": "ghcr.io",
+  "repository": "rajistics-demo/prepared-monorepo-sandbox",
+  "tag": "data-settlements-v1",
+  "manifest_digest": "sha256:6475636712579eae66bcec44197885365fd34ea0c5b0f16b573a41df0a1a68a4",
+  "artifact_type": "application/vnd.rajistics.settlements-corpus.v1"
+ },
+ "assets": [
+  {
+   "name": "settlements-v1-shard-1.tar.gz",
+   "bytes": 305620008,
+   "sha256": "d39029e4f7554c2ed91bae03abcf44e2b0f33bec600dff7e4162c353a20108df",
+   "raw_bytes": 1230366801,
+   "files": 91,
+   "compresslevel": 6,
+   "shard": 1,
+   "first_day": "2024-01-01",
+   "last_day": "2024-03-31"
+  },
+  {
+   "name": "settlements-v1-shard-2.tar.gz",
+   "bytes": 291779246,
+   "sha256": "614d5f171bc3381ed26209976c7bc7fded780e0ff9bbf896d48158143491cc3f",
+   "raw_bytes": 1174610068,
+   "files": 91,
+   "compresslevel": 6,
+   "shard": 2,
+   "first_day": "2024-04-01",
+   "last_day": "2024-06-30"
+  },
+  {
+   "name": "settlements-v1-shard-3.tar.gz",
+   "bytes": 291308719,
+   "sha256": "22d939a1df85d91a5209d70435bf0ae7ef3db2438ae99c370a9aaffa7a691dbb",
+   "raw_bytes": 1172728479,
+   "files": 92,
+   "compresslevel": 6,
+   "shard": 3,
+   "first_day": "2024-07-01",
+   "last_day": "2024-09-30"
+  },
+  {
+   "name": "settlements-v1-shard-4.tar.gz",
+   "bytes": 305148459,
+   "sha256": "c03b08adaa3f1b725ce641009af2336c31094ab8d87921b5afa84989e57fc46e",
+   "raw_bytes": 1228448816,
+   "files": 92,
+   "compresslevel": 6,
+   "shard": 4,
+   "first_day": "2024-10-01",
+   "last_day": "2024-12-31"
+  },
+  {
+   "name": "settlements-v1-shard-5.tar.gz",
+   "bytes": 302057158,
+   "sha256": "decad0ca03bc2f504e87f0c2b21ab605c4a873f624bed211efe5226832871515",
+   "raw_bytes": 1216021965,
+   "files": 90,
+   "compresslevel": 6,
+   "shard": 5,
+   "first_day": "2025-01-01",
+   "last_day": "2025-03-31"
+  },
+  {
+   "name": "settlements-v1-shard-6.tar.gz",
+   "bytes": 291756522,
+   "sha256": "09a8836a9a7a4b1330288466529044540c194f553d766afb5477fbb787c3530d",
+   "raw_bytes": 1174554701,
+   "files": 91,
+   "compresslevel": 6,
+   "shard": 6,
+   "first_day": "2025-04-01",
+   "last_day": "2025-06-30"
+  },
+  {
+   "name": "settlements-v1-shard-7.tar.gz",
+   "bytes": 291122322,
+   "sha256": "f254c8544c8b18622ef9bb28c65cfffc8966169c60252595e698b4c95320978d",
+   "raw_bytes": 1172009001,
+   "files": 92,
+   "compresslevel": 6,
+   "shard": 7,
+   "first_day": "2025-07-01",
+   "last_day": "2025-09-30"
+  },
+  {
+   "name": "settlements-v1-shard-8.tar.gz",
+   "bytes": 305087230,
+   "sha256": "b7452c27a64199703f35ec9e4f93562d89d0aa2116d2b0e3e27dbe563a22e402",
+   "raw_bytes": 1228205239,
+   "files": 92,
+   "compresslevel": 6,
+   "shard": 8,
+   "first_day": "2025-10-01",
+   "last_day": "2025-12-31"
+  }
+ ]
+}
