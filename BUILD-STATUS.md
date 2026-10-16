@@ -1,6 +1,6 @@
 # Build status: prepared-monorepo-demo
 
-Last updated: 2026-10-15 21:50Z: M7 demo2 complete. The agent investigated, ran red/fix/green, pushed its own branch and opened draft PR #3 with the normal provider token; fresh `oh-verify` PASS at the published SHA in a separate sandbox; cache-key invalidation probe; task-only cleanup; baseline unchanged (Opus 5.5 in Agent Canvas; Codex supervising).
+Last updated: 2026-10-16 02:00Z: M8 demo10g complete. Full 9.6 GB synthetic settlement corpus materialized live in a task-owned sandbox under a 10 GiB task budget; agent red/fix/green, own push and draft PR #4 at `3bb23b7`; fresh exact-SHA verifier PASS in a separate sandbox; task-only cleanup; baseline unchanged (Opus 5.5 in Agent Canvas; Codex supervising).
 Plan: `/Users/rajiv.shah/Code/install_replicate/demo-plans/root-monorepo/technical-plan.md`
 (+ `evidence-and-decisions.md`). This file is the single place to check progress.
 
@@ -9,7 +9,7 @@ Plan: `/Users/rajiv.shah/Code/install_replicate/demo-plans/root-monorepo/technic
 **Rollout scope:** Raj has authorized registering the new image on Rajistics and running the demo end to end,
 on condition that his existing image and workloads are left alone.
 
-**State:** M0-M6 done. M7 demo2 ran end to end on Rajistics on 2026-10-15 with agent-owned publication (see "M7
+**State:** M0-M8 done. M8 demo10g ran end to end on Rajistics on 2026-10-16 against the ~10 GB base `demo/base-10g-v1` (`b05805e`, branch `demo10g/main`): draft [PR #4](https://github.com/rajistics-demo/prepared-monorepo-demo/pull/4) at `3bb23b7` awaits human review (see "M8 demo10g run"). M7 demo2 ran end to end on Rajistics on 2026-10-15 with agent-owned publication (see "M7
 demo2 run"): draft [PR #3](https://github.com/rajistics-demo/prepared-monorepo-demo/pull/3) at `0d5c346` awaits
 human review. The M6 demo1 draft [PR #1](https://github.com/rajistics-demo/prepared-monorepo-demo/pull/1) was
 launcher-published because the sandbox token got 403. After Raj added this repo to GitHub App installation
@@ -52,6 +52,7 @@ launcher-published because the sandbox token got 403. After Raj added this repo 
 | M5 Additive Rajistics registration (`prepared-monorepo` warm config beside `v1_current`) | **done** (2026-10-15, SSM `2b2f727a`): exact digest `prepared-monorepo-sandbox@sha256:b5626174…fd9e0`, count 0 (no warm pods); `v1_current` config hash unchanged; disk 44.8% now, 53.3% projected | `rajistics-evidence/2026-10-12/save-1.txt`, `capacity-settled-2026-10-15.txt` |
 | M6 Live E2E demo on Rajistics (agent red/fix/green, demo branch, fresh verify, Sysbox and isolation probes, cleanup) | **done (demo1), human review pending**: agent red/fix/green; launcher-published draft PR #1 (agent push 403); fresh `oh-verify` **PASS** at `173e2a0`; FS/Docker/DB separation across sandboxes, network **not** isolated (auth enforced) | see "M6 demo1 run"; private `rajistics-evidence/2026-10-12/m6-demo1/REPORT.md` |
 | M7 demo2: agent-owned publication, fresh verify of the published SHA, invalidation probe | **done, human review pending**: agent red/fix/green, then its own push and draft PR #3 at `0d5c346` with the normal provider token; fresh `oh-verify` **PASS** in a separate sandbox; cache keys HIT for the agent commit and MISS only for the perturbed input; test SHA in the PR body corrected after the fact | see "M7 demo2 run"; private `rajistics-evidence/2026-10-12/m7-demo2/REPORT.md` |
+| M8 demo10g: ~10 GB synthetic corpus (OCI data artifact), full live materialization, agent run, fresh verify | **done, human review pending**: 731 files / 9,596,945,070 B materialized live in 138.6 s inside a 10 GiB task budget; agent ASSERTION_RED → GREEN → suite GREEN, own push and draft PR #4 at `3bb23b7`; fresh verifier **PASS** at the published SHAs; PR CI green; task sandboxes deleted | `rajistics-evidence/2026-10-12/m8-demo10g/`, `m8-corpus/`; see "M8 demo10g run" |
 
 ### M6 live progress (2026-10-15, Rajistics app 1.71.0 / chart 0.81.0 / runtime-api 0.11.1)
 
@@ -100,6 +101,75 @@ What each line is: **live** = observed on Rajistics today; **source** = read fro
     secret overrides existing secret"). Proposed for the demo start: shadow every inherited name except the ones the run
     needs with a non-sensitive placeholder, including `Runtime_API_Admin_Password` defensively. This is masking for one
     conversation, not access control, and is disclosed as such.
+
+### M8 demo10g run (2026-10-16 01:33-01:52Z, live unless marked)
+
+What changed from M7: the base now carries a synthetic processor settlement corpus (731 daily CSVs, 9,596,945,070
+bytes, gzip 2,383,879,664 bytes in 8 shards) published once as an immutable OCI data artifact
+`ghcr.io/rajistics-demo/prepared-monorepo-sandbox:data-settlements-v1` and pinned by digest in
+`server/data/settlements/corpus.lock.json` + `manifest.json`. Files are not in Git or in the sandbox image; each
+task materializes them with `tools/settlements-corpus/materialize.py` (anonymous pull by blob digest, streaming
+gunzip/untar, per-file sha256 against the manifest, read-only files, budget and node-free-disk gates). The planted
+defect is in `Settlements::Reconciliation` (synthetic, planted by the operator; no reference solution exists in
+the repo, and an audit of reachable refs found no fix hints).
+
+- **Corpus pipeline (CI, GitHub-hosted):** run 38834214762 failed at a shard push (GHCR 404 on the closing `PUT`
+  of a streamed `PATCH` upload); cancelled, log kept in `m8-corpus/`, fixed by a monolithic blob `PUT`
+  (`9e72523`). Run 38834464552 published all 8 shards + assemble; its validate step failed only on a missing
+  `cp` destination, fixed in `b05805e` without republishing the tag. Run 38834760062 then passed full
+  materialization, every-byte reverify, determinism and composition. CI 38834760181 failed because a test day was
+  not materialized; fixed by the test-day scan in `b05805e`. At `b05805e` both CI 38835297820 (server-suite,
+  events-svc, secret-scan) and corpus 38835297810 passed. CI-only: full 731-file materialization 70.8 s, max RSS
+  ~32 MiB; checkout logical 9,597,876,177 B, allocated 9,599,406,080 B. Base tag `demo/base-10g-v1` → `b05805e`.
+- **Preflight (live):** SSM snapshot 01:33:20Z: helm `openhands` rev 30, chart 0.81.0, app 1.71.0; node free
+  171.79 GB, no pressure conditions. Same registered digest `prepared-monorepo-sandbox@sha256:b5626174…fd9e0`; no
+  new outer image.
+- **Setup (live):** task-owned sandbox `work10g` `AM9NXMaHN32KJN1nIB7t7`, RUNNING in 21.2 s; `/workspace` and
+  `/var/lib/docker` are node-disk (`/dev/root`) hostPath mounts; pod limits 1 CPU / 2 GiB / 10Gi ephemeral.
+  `prepare-workspace --mode prepared` at `b05805e`: READY in 33.25 s, no cache misses (the seed predates
+  `demo10g`, so the target SHA was fetched).
+- **Full materialization (live):** `materialize.py --budget-root <task> --budget-bytes 10737418240
+  --min-node-free-bytes 120000000000`: OK in 138.6 s, 731/731 files verified, 2,383,879,664 B fetched; task dir
+  allocated 9,599,991,808 B (within 10 GiB); node free 167.42 → 157.78 GB; cgroup `oom`/`oom_kill` 0, anon
+  ~466 MiB (memory.max events were page-cache reclaim); node `DiskPressure=False`, memory PSI 0. Git status clean
+  after removing one `__pycache__` file the materializer import wrote (follow-up below).
+- **Agent (live):** conversation
+  [`3badb367…`](https://app.replicated.rajistics.com/conversations/3badb367a9e74e6d82952cf288f2ca24) READY in
+  10.7 s on model `openhands/us.anthropic.claude-sonnet-4-6`; 29 inherited secret names masked, only
+  `GITHUB_TOKEN` kept. First action 01:40:07; regression test
+  `server/test/services/settlements/reconciliation_test.rb` (3 tests, pins `Date.iso8601("2025-03-14")`, includes
+  a must-still-mismatch case); `oh-phase red` ASSERTION_RED at 01:41:48 (time to first meaningful test ≈ 1 m 41 s
+  after first action); test commit `0c82727`; 1-line fix using the existing `LedgerEntry::SIGNED_AMOUNT`;
+  `oh-phase green` GREEN 01:42:30; `oh-phase suite` GREEN 01:43:19; fix commit `3bb23b7`; one push and one draft
+  PR create, both succeeded (PR #4, base `demo10g/main`, head `3bb23b7`). Finished 01:44:06 (~4 min). PR body
+  SHAs match git.
+- **Fresh verifier (live):** new sandbox `verify10g` `1cUx7XZDZfzNhf2j2lLi3U`, same digest, no task dirs or
+  corpus files at start. Wrapper `verify-10g.sh` (the image's `oh-verify` predates the corpus): fetch H, check
+  manifest/lock blobs equal at B and H, materialize only test-referenced days from H's pins into a read-only
+  verifier dir (2 days, 28.9 MB written from 607.7 MB streamed, 18.9 s), export `SETTLEMENTS_CORPUS_DIR`, run the
+  unchanged `oh-verify --mode prepared`. **PASS** (168.2 s total; `oh-verify` 148.7 s). RED at B with H's tests:
+  ASSERTION_RED, 2 failures inside the new tests with the bug report's exact numbers (`difference_cents=77323096`;
+  expected 2067353233, actual 2144676329). GREEN at H: full suite 27 pass, all 3 new tests pass. Static: ancestry
+  ok, only `server/**`, no forbidden or bypass patterns, no pre-existing test edits, tests unchanged after red,
+  test blob equal at T and H. Distinct task dirs and Compose projects; fixtures restored; row counts 0 before runs.
+- **GitHub CI on PR #4:** run 38836697040 success (server-suite, events-svc, secret-scan; verifier job skipped by
+  its condition).
+- **Transcript audit:** 122 events, 38 agent actions; no fetch or read of other refs, PRs or `BUILD-STATUS.md`
+  (only a directory listing showing the filename); exactly 2 publish actions; 0 credential-pattern hits.
+- **Finding, not changed: expired GPG signing config injected at conversation start.** The first test commit
+  failed (`gpg: signing failed: Unusable secret key`); the agent set `commit.gpgsign=false` in the task-local repo
+  config and committed unsigned. `~/.gitconfig` (global, written 01:39:59) sets `commit.gpgsign=true`,
+  `user.signingkey BC3BF8BAFBA1B71C` and identity `OpenHands Rajistics POC <openhands-gpg-poc@rajistics.invalid>`;
+  the key expired 2026-08-21. The conversation-free verifier sandbox from the same image has none of this, and
+  M7's PR #3 commits have the same unsigned POC identity (its agent used `-c commit.gpgsign=false`). The request
+  masked the `gpg_key` secret and the cached plugin `rajiv-openhands-plugins` has no GPG references, so the
+  injection source is undetermined. Leftover from the 2026-08-20 GPG POC; needs an owner decision.
+- **Cleanup (live):** both task sandboxes deleted (200, GET returns none); runtime pod gone; the pre-existing
+  runtime pod of another image untouched; node free back to 171.13 GB, no pressure conditions. The snapshot does
+  not list PVCs, so PVC removal is inferred from pod deletion and returned disk.
+- **Not measured in M8:** an unprepared cold run at the 10 GB base (the cold-vs-prepared headline remains the
+  earlier n=1 bench); corpus materialization is a per-task cost here (138.6 s full, 18.9 s for 2 test days), not
+  pre-seeded or shared.
 
 ### M7 demo2 run (2026-10-15 21:24-21:50Z, live unless marked)
 
@@ -419,8 +489,13 @@ anything consumed it, and the reference branch was rebased onto it. `main` was n
 
 ## Next steps
 
-1. **Human review of draft PR #3** (diff, verifier JSON, conversation `4dedd893…`). PR #1 (demo1) and PR #2 (the
-   access check) are also open drafts. Do not merge without review.
+1. **Human review of draft PR #4** (diff, `m8-demo10g/verify-demo10g.json`, conversation `3badb367…`) and of
+   PR #3. PR #1 (demo1) and PR #2 (the access check) are also open drafts. Do not merge without review.
+1a. **GPG POC leftover (owner decision):** find what writes the expired signing config into conversation
+   sandboxes and decide whether to remove it or provision a valid per-user key. Until then agent commits are
+   unsigned and agents disable signing locally; a customer repo that requires signed commits would reject them.
+1b. **Small follow-ups on `demo10g/main` (after review):** ignore `tools/**/__pycache__/`; move the corpus step of
+   `verify-10g.sh` into `oh-verify` / `prepare-workspace` with the next image rebuild.
 2. **Publish path: resolved for this repo.** Since Raj added the repo to installation 164552425, the agent pushes and
    opens PRs with the normal provider token (PR #2, PR #3). Launcher-side publishing is no longer needed here.
 3. **Guard reported SHAs:** add "full SHAs from `git rev-parse` only" to `server/AGENTS.md` / the bug-report prompt,
@@ -434,6 +509,7 @@ anything consumed it, and the reference branch was rebased onto it. `main` was n
 
 ## Blockers / open risks
 
+- **Open (M8): expired GPG signing config in conversation sandboxes.** See "M8 demo10g run". Not changed.
 - **Resolved: pull auth.** Raj made both packages public (anonymous HEAD 200 at both pinned digests). No
   credential was created. Digests and tags were unchanged.
 - **Not a gate; disclosure required: reference fix is publicly readable.** The acceptance criteria allow either
